@@ -3,9 +3,10 @@ venv/
 __pycache__/
 *.pyc
 
-# Project specific
-generated_experiment.py
+# Project outputs
+outputs/
 .env
+!.env.example
 
 # Mac / Apple Silicon
 .DS_Store

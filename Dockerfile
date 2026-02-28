@@ -1,34 +1,40 @@
-# Dockerfile for ARS (Autonomous Research Scientist)
+# ────────────────────────────────────────────────
+# ARS — Autonomous Research Scientist  (Ollama backend)
+# ────────────────────────────────────────────────
+# Uses Ollama REST API for LLM inference inside the container.
+# The Ollama server can run on the host or in a companion container.
 #
-# CRITICAL WARNING:
-# This Dockerfile is based on Linux (standard for Docker).
-# Apple's MLX library is currently NOT supported on Linux.
-# As such, running `python main.py` inside this container WILL FAIL
-# because `mlx-lm` cannot be installed or executed on Linux.
+# Build:
+#   docker build -t ars .
 #
-# This file is provided for project structure compliance only.
-# To run this application, you MUST run it NATIVELY on macOS.
-
+# Run (Ollama on host):
+#   docker run --rm -it \
+#     --env-file .env \
+#     -e LLM_BACKEND=ollama \
+#     -e OLLAMA_URL=http://host.docker.internal:11434 \
+#     -v "$(pwd)/outputs:/app/outputs" \
+#     ars
+# ────────────────────────────────────────────────
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git curl && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# Install dependencies
-# NOTE: This step will likely FAIL for 'mlx-lm' on Linux architecture
-# checks are often needed here. We attempt the install but expect failure.
-RUN pip install --no-cache-dir -r requirements.txt || echo "WARNING: MLX installation failed as expected on Linux."
+# Install Python deps — skip macOS-only packages
+RUN pip install --no-cache-dir \
+    $(grep -v 'sys_platform.*darwin' requirements.txt | grep -v '^#' | grep -v '^$')
 
-# Copy application code
 COPY main.py .
+COPY .env.example .env.example
 
-# Entry point
-# This will likely crash with an ImportError or PlatformError for MLX
+# Force Ollama backend inside containers (MLX is macOS-only)
+ENV LLM_BACKEND=ollama
+ENV OLLAMA_URL=http://host.docker.internal:11434
+
 CMD ["python", "main.py"]

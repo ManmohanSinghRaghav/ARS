@@ -1,46 +1,131 @@
-# ARS (Autonomous Research Scientist) - MLX Version
+# ARS — Autonomous Research Scientist
 
-This application uses `mlx_lm` to run LLM inference locally on Apple Silicon (macOS) using Metal API.
+A multi-agent pipeline that autonomously searches literature, generates novel hypotheses, writes experiment code, executes it, and produces research papers — powered by a local LLM via **MLX** (macOS) or **Ollama** (any platform).
+
+## Architecture
+
+```
+Search → Reader → Reasoning ⇄ Critic → Coder → Executor ⇄ Code Critic → Writer ⇄ Paper Critic → Save
+                    (max 3)                        (max 3)                   (max 2)
+```
+
+**10 agent nodes** connected by a LangGraph `StateGraph` with 3 self-correcting feedback loops.
+
+| Node | Role |
+|------|------|
+| **Search** | Fetches top-3 ArXiv papers + top-3 Tavily web results |
+| **Reader** | LLM extracts structured JSON (domain, findings, gaps, novelty score) |
+| **Reasoning** | Generates a novel, testable hypothesis |
+| **Critic** | Peer-reviews hypothesis for novelty; APPROVED / REJECTED |
+| **Coder** | Writes a self-contained Python experiment |
+| **Executor** | Runs the script via subprocess (120s timeout) |
+| **Code Critic** | Reviews execution output; APPROVED / REJECTED |
+| **Writer** | Composes a full Markdown research paper |
+| **Paper Critic** | Journal-editor review for uniqueness & quality |
+| **Save** | Writes `*_paper.md` + `*_summary.json` to `outputs/` |
 
 ## Requirements
 
-- **OS**: macOS (specifically Apple Silicon M1/M2/M3)
-- **Python**: 3.10+
-- **Hardware**: Sufficient RAM (16GB+ recommended for 3B models)
+- **Python** 3.10+
+- **One of:**
+  - macOS Apple Silicon (M1/M2/M3/M4) for MLX backend
+  - [Ollama](https://ollama.com) installed and running for Ollama backend (any OS)
+- **Tavily API key** ([tavily.com](https://tavily.com)) for web search
 
-## Setup (Recommended: Native)
+## Quick Start
 
-Running this natively is highly recommended because `mlx` relies on macOS GPU acceleration which is not available in standard Docker containers.
+### Option A: macOS with MLX (GPU-accelerated)
 
-1.  **Clone/Navigate to directory**:
-    ```bash
-    cd R:\MiniProject\ARS
-    ```
+```bash
+# Clone & enter project
+cd ARS
 
-2.  **Create Virtual Environment**:
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows PowerShell: .\venv\Scripts\Activate.ps1
-    ```
+# One-command setup + run:
+bash run_ars.sh
+```
 
-3.  **Install Dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+### Option B: Any platform with Ollama
 
-4.  **Configure API Key**:
-    - Edit `.env` file and set your `TAVILY_API_KEY`.
+```bash
+# 1. Install Ollama: https://ollama.com/download
+# 2. Start server & pull model:
+ollama serve &
+ollama pull qwen2.5:3b
 
-5.  **Run Application**:
-    ```bash
-    python main.py
-    ```
+# 3. Setup Python environment
+python -m venv venv
+source venv/bin/activate        # Windows: .\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 
-## Docker Warning
+# 4. Configure
+cp .env.example .env
+# Edit .env — set TAVILY_API_KEY and LLM_BACKEND=ollama
 
-The `Dockerfile` is provided for structure, but **standard Docker containers are Linux-based**.
+# 5. Run
+python main.py
+```
 
-- `mlx` and `mlx_lm` will **fail to install or run** inside a standard Linux container because they require macOS frameworks.
-- There is no official "macOS Docker image" for running Python applications in this way.
+### Option C: Docker (Ollama on host)
 
-If you must run in a containerized environment on macOS, consider using a VM or checking if `mlx` has released experimental Linux support (cpu-only), but performance will be severely degraded compared to native Metal execution.
+```bash
+# Start Ollama on host first
+ollama serve &
+ollama pull qwen2.5:3b
+
+# Build & run container
+docker build -t ars .
+docker run --rm -it \
+  --env-file .env \
+  -e LLM_BACKEND=ollama \
+  -e OLLAMA_URL=http://host.docker.internal:11434 \
+  -v "$(pwd)/outputs:/app/outputs" \
+  ars
+```
+
+## Configuration
+
+All settings live in `.env` (copy from `.env.example`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TAVILY_API_KEY` | *(required)* | Web search API key |
+| `LLM_BACKEND` | auto-detect | `mlx` (macOS) or `ollama` (any) |
+| `MLX_MODEL` | `mlx-community/Qwen2.5-3B-Instruct-bf16` | HuggingFace model ID for MLX |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | Ollama model tag |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server address |
+
+## Outputs
+
+All generated files go to `outputs/`:
+
+| File | Content |
+|------|---------|
+| `<topic>_paper.md` | Full research paper in Markdown |
+| `<topic>_summary.json` | Run metadata (iterations, timestamps, word count) |
+| `generated_experiment.py` | Last experiment code |
+| `checkpoints.sqlite` | LangGraph checkpoint DB (enables crash recovery) |
+
+## Crash Recovery
+
+The pipeline uses a SQLite checkpointer. If the process crashes mid-run, re-running with the **same topic** will resume from the last completed node instead of starting over.
+
+## Project Structure
+
+```
+ARS/
+├── main.py              # All agent nodes, graph, and entry point
+├── requirements.txt     # Pinned dependencies (platform-conditional)
+├── .env                 # Your local config (git-ignored)
+├── .env.example         # Template for .env
+├── .gitignore
+├── Dockerfile           # Ollama-based container
+├── run_ars.sh           # One-command setup for macOS/Linux
+├── README.md            # This file
+└── outputs/             # Generated papers, code, checkpoints
+```
+
+## Known Limitations
+
+- **Code execution is unsandboxed** — LLM-generated code runs with full system access via `subprocess`. Use in a VM or container if concerned about safety.
+- **3B model quality** — Qwen2.5-3B produces reasonable but not state-of-the-art results. For better output, use a larger model (e.g., `qwen2.5:14b` via Ollama).
+- **Paper length** — Max 4096 tokens for paper generation; very long papers may be truncated.
