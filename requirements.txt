@@ -1,0 +1,9 @@
+langchain-topk-retriever
+langgraph
+langchain-tavily
+langchain-community
+langchain-arxiv
+arxiv
+mlx-lm
+python-dotenv
+huggingface_hub

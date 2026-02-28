@@ -1,1 +1,16 @@
-venv
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Project specific
+generated_experiment.py
+.env
+
+# Mac / Apple Silicon
+.DS_Store
+
+# Logs or temporary output
+*.log
+*.sqlite
+.ipynb_checkpoints/
