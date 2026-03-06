@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
+
+/* Markdown prose styles */
+.prose h1 { @apply text-2xl font-bold mt-6 mb-3; }
+.prose h2 { @apply text-xl font-semibold mt-5 mb-2; }
+.prose h3 { @apply text-lg font-semibold mt-4 mb-2; }
+.prose p { @apply mb-3 leading-relaxed; }
+.prose ul { @apply list-disc pl-6 mb-3; }
+.prose ol { @apply list-decimal pl-6 mb-3; }
+.prose li { @apply mb-1; }
+.prose code { @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono; }
+.prose pre { @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto mb-4; }
+.prose pre code { @apply bg-transparent p-0; }
+.prose blockquote { @apply border-l-4 border-primary-300 pl-4 italic text-gray-600 mb-3; }
+.prose table { @apply w-full border-collapse mb-4; }
+.prose th { @apply border border-gray-300 bg-gray-100 px-3 py-2 text-left font-semibold; }
+.prose td { @apply border border-gray-300 px-3 py-2; }
