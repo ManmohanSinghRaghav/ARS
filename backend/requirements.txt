@@ -4,13 +4,8 @@ uvicorn[standard]>=0.27.0
 pydantic[email]>=2.5.0
 pydantic-settings>=2.1.0
 
-# ── Database ──
-sqlalchemy>=2.0.0
-
-# ── Auth ──
-python-jose[cryptography]>=3.3.0
-bcrypt>=4.0.0
-python-multipart>=0.0.6
+# ── Database & Auth ──
+firebase-admin>=6.3.0
 
 # ── LangGraph pipeline ──
 langgraph>=0.2.0
@@ -25,6 +20,7 @@ huggingface_hub>=0.23.0   ; sys_platform == "darwin"
 requests>=2.31.0
 
 # ── Experiment deps (used by generated code) ──
+hopx-ai
 numpy>=1.26.0
 torch>=2.2.0
 

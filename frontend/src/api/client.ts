@@ -2,6 +2,7 @@
  * Axios API client with JWT interceptor.
  */
 import axios from 'axios';
+import { auth } from '../firebase';
 
 const API_BASE = '/api';
 
@@ -14,9 +15,10 @@ const client = axios.create({
 });
 
 // ── Request interceptor: attach JWT ──
-client.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
-  if (token) {
+client.interceptors.request.use(async (config) => {
+  const user = auth.currentUser;
+  if (user) {
+    const token = await user.getIdToken(true);
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -40,10 +42,7 @@ client.interceptors.response.use(
 
 // ── API methods ──
 export const authAPI = {
-  register: (data: { username: string; email: string; password: string }) =>
-    client.post('/auth/register', data),
-  login: (data: { username: string; password: string }) =>
-    client.post('/auth/login', data),
+  // Sync user info with backend if necessary
   me: () => client.get('/auth/me'),
 };
 

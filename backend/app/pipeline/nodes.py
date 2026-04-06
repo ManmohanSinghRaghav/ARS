@@ -6,8 +6,7 @@ Extracted from original main.py and parameterized with LLM config.
 import os
 import sys
 import json
-import subprocess
-import tempfile
+import hopx
 from typing import List, Optional
 
 from langchain_community.utilities import ArxivAPIWrapper
@@ -22,7 +21,7 @@ from app.pipeline.progress import add_step
 
 
 def _make_nodes(llm_config: Optional[dict] = None, outputs_dir: str = "outputs",
-                tavily_api_key: str = "", run_id: int | None = None):
+                tavily_api_key: str = "", run_id: str | None = None):
     """
     Factory that returns all node functions bound to the given config.
     This avoids relying on global state and lets each run use per-user settings.
@@ -251,43 +250,40 @@ def _make_nodes(llm_config: Optional[dict] = None, outputs_dir: str = "outputs",
 
     # ── 6. Executor ───────────────────────────
     def execute_code_node(state: AgentState) -> dict:
-        section(6, "Executor  —  Running experiment", _run_id)
+        section(6, "Executor  —  Running experiment in HopX Sandbox", _run_id)
         _progress(6, "Running experiment")
         code = state["generated_code"]
 
-        tmpdir = tempfile.mkdtemp(prefix="ars_exec_")
-        filepath = os.path.join(tmpdir, "generated_experiment.py")
-
         try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(code)
-        except OSError as e:
-            msg = f"FILE_WRITE_ERROR: Could not write {filepath}: {e}"
+            print("  [Sandbox] Booting HopX environment...")
+            sandbox = hopx.Sandbox.create(template="base")
+        except Exception as e:
+            msg = f"SANDBOX_CREATE_ERROR: Could not create sandbox: {e}"
             print(f"  ✗ {msg}")
-            _progress(6, "Running experiment", "done", "File write error")
+            _progress(6, "Running experiment", "error", "Sandbox creation failed")
             return {"execution_output": msg}
 
         try:
-            proc = subprocess.run(
-                [sys.executable, filepath],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            stdout = proc.stdout.strip()
-            stderr = proc.stderr.strip()
+            print("  [Sandbox] Running experiment code...")
+            result = sandbox.run_code(code)
+            stdout = result.stdout.strip() if hasattr(result, 'stdout') and result.stdout else ""
+            stderr = result.stderr.strip() if hasattr(result, 'stderr') and result.stderr else ""
+            
             output = f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"
-            if proc.returncode == 0:
-                print(f"  ✓ Exit 0  ({len(stdout)} chars stdout)")
+            
+            if not stderr:
+                print(f"  ✓ Sandbox execute success  ({len(stdout)} chars stdout)")
             else:
                 preview = stderr[:300] if stderr else stdout[:300]
-                print(f"  ✗ Exit {proc.returncode}  —  {preview}")
-        except subprocess.TimeoutExpired:
-            output = "TIMEOUT: Script exceeded 120 seconds."
-            print("  ✗ Timed out")
+                print(f"  ⚠ Sandbox execute error output  —  {preview}")
         except Exception as e:
             output = f"EXECUTION FAILED: {e}"
-            print(f"  ✗ {e}")
+            print(f"  ✗ Sandbox code execution failed: {e}")
+        finally:
+            try:
+                sandbox.kill()
+            except Exception:
+                pass
 
         _progress(6, "Running experiment", "done")
         return {"execution_output": output}

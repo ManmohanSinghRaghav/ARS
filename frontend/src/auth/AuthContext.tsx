@@ -1,8 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { authAPI } from '../api/client';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut as firebaseSignOut,
+  updateProfile,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { auth } from '../firebase';
+// import { authAPI } from '../api/client';
 
-interface User {
-  id: number;
+export interface User {
+  id: string;
   username: string;
   email: string;
   role: string;
@@ -11,7 +20,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -22,41 +31,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Check token on mount
   useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      authAPI
-        .me()
-        .then((res) => setUser(res.data))
-        .catch(() => {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-        })
-        .finally(() => setLoading(false));
-    } else {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser: FirebaseUser | null) => {
+      if (firebaseUser) {
+        setUser({
+          id: firebaseUser.uid,
+          username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+          email: firebaseUser.email || '',
+          role: 'user', // Default role; fetch from claims/firestore if needed
+        });
+      } else {
+        setUser(null);
+      }
       setLoading(false);
-    }
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const login = async (username: string, password: string) => {
-    const res = await authAPI.login({ username, password });
-    localStorage.setItem('access_token', res.data.access_token);
-    localStorage.setItem('refresh_token', res.data.refresh_token);
-    const meRes = await authAPI.me();
-    setUser(meRes.data);
+  const login = async (email: string, password: string) => {
+    await signInWithEmailAndPassword(auth, email, password);
   };
 
   const register = async (username: string, email: string, password: string) => {
-    await authAPI.register({ username, email, password });
-    // Auto-login after register
-    await login(username, password);
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    await updateProfile(userCredential.user, { displayName: username });
+    setUser({
+      id: userCredential.user.uid,
+      username,
+      email: email,
+      role: 'user',
+    });
   };
 
-  const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    setUser(null);
+  const logout = async () => {
+    await firebaseSignOut(auth);
   };
 
   return (
