@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.pipeline.graph import build_graph
+from app.pipeline.crew import run_crew_pipeline
 from app.pipeline.progress import add_step, clear as clear_progress
 from app.config import get_settings
 from app.database import get_db
@@ -64,35 +64,14 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
     run_ref = db_client.collection("runs").document(run_id)
 
     try:
-        add_step(run_id, 0, 10, "Initializing pipeline", "running")
+        add_step(run_id, 0, 10, "Initializing CrewAI pipeline", "running")
 
-        app = build_graph(
-            llm_config=llm_config,
-            outputs_dir=outputs_dir,
-            tavily_api_key=tavily_api_key,
+        # Kickoff Crew
+        result = run_crew_pipeline(
+            topic=topic,
             run_id=run_id,
+            llm_config=llm_config,
         )
-
-        thread_id = hashlib.md5(topic.encode()).hexdigest()[:12]
-        config = {"configurable": {"thread_id": thread_id}}
-
-        initial_state = {
-            "research_topic": topic,
-            "retrieved_docs": [],
-            "knowledge_context": {},
-            "final_reasoning": "",
-            "critic_feedback": "",
-            "critique_count": 0,
-            "generated_code": "",
-            "execution_output": "",
-            "code_feedback": "",
-            "code_critique_count": 0,
-            "research_paper": "",
-            "paper_feedback": "",
-            "paper_critique_count": 0,
-        }
-
-        result = app.invoke(initial_state, config=config)
 
         backend = (llm_config or {}).get("llm_backend", default_backend or "ollama")
         model_name = (
@@ -101,19 +80,15 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
             else (llm_config or {}).get("ollama_model", default_ollama)
         )
 
+        # CrewAI returns the markdown paper, hypothesis overview, and execution run stats
         run_ref.update({
             "status": "completed",
-            "hypothesis": result.get("final_reasoning", ""),
-            "generated_code": result.get("generated_code", ""),
+            "hypothesis": result.get("hypothesis", ""),
+            "generated_code": "", # Removed explicitly to just rely on execution output logs
             "execution_output": result.get("execution_output", ""),
-            "paper_markdown": result.get("research_paper", ""),
+            "paper_markdown": result.get("final_paper", ""),
             "summary_json": {
                 "topic": topic,
-                "hypothesis": result.get("final_reasoning", "")[:500],
-                "hypothesis_iterations": result.get("critique_count", 0),
-                "code_iterations": result.get("code_critique_count", 0),
-                "paper_iterations": result.get("paper_critique_count", 0),
-                "paper_word_count": len(result.get("research_paper", "").split()),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "llm_backend": backend,
                 "model": model_name,

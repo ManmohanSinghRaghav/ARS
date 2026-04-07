@@ -5,11 +5,17 @@ import os
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+from pathlib import Path
+from app.config import BACKEND_DIR
+
 # Initialize Firebase Admin if not already initialized
 if not firebase_admin._apps:
-    cert_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "service-account.json")
-    if os.path.exists(cert_path):
-        cred = credentials.Certificate(cert_path)
+    cert_path_env = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "service-account.json")
+    # Resolve relative to backend's parent (the project root ARS folder)
+    cert_path = BACKEND_DIR.parent / cert_path_env
+    
+    if cert_path.exists():
+        cred = credentials.Certificate(str(cert_path))
         firebase_admin.initialize_app(cred)
     else:
         # Fallback to default application credentials if running in GCP, 

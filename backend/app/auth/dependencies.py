@@ -20,7 +20,7 @@ def get_current_user(
     """Extract and validate the Firebase ID Token from Authorization Bearer token."""
     token = credentials.credentials
     try:
-        decoded_token = auth.verify_id_token(token)
+        decoded_token = auth.verify_id_token(token, clock_skew_seconds=60)
         return User(
             id=decoded_token.get("uid"),
             email=decoded_token.get("email", ""),
@@ -28,6 +28,7 @@ def get_current_user(
             role=decoded_token.get("role", "user")
         )
     except Exception as e:
+        print(f"Auth Error: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication credentials: {e}",

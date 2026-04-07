@@ -12,7 +12,6 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.database import create_tables
 from app.routers import runs, settings
 
 settings_obj = get_settings()
@@ -41,10 +40,9 @@ app.include_router(settings.router)
 @app.on_event("startup")
 def on_startup():
     os.makedirs(settings_obj.OUTPUTS_DIR, exist_ok=True)
-    create_tables()
     print("─" * 55)
     print("  ARS Backend — FastAPI")
-    print(f"  Database : {settings_obj.DATABASE_URL}")
+    print(f"  Database : Firebase Firestore (NoSQL)")
     print(f"  Outputs  : {settings_obj.OUTPUTS_DIR}")
     print("─" * 55)
 

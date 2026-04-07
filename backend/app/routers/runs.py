@@ -90,8 +90,8 @@ def list_runs(
     if current_user.role != "admin":
         query = query.where("user_id", "==", current_user.id)
     
-    # Firestore ordering (might need an index if where + order_by are mixed)
-    query = query.order_by("created_at", direction="DESCENDING").offset(skip).limit(limit)
+    # ── Temp fix: Remove order_by to avoid Firestore index requirement ──
+    # query = query.order_by("created_at", direction="DESCENDING").offset(skip).limit(limit)
     docs = query.stream()
 
     result = []
@@ -106,7 +106,10 @@ def list_runs(
             "created_at": r.get("created_at"),
             "completed_at": r.get("completed_at"),
         })
-    return result
+
+    # In-memory sort and pagination since index is missing
+    result.sort(key=lambda x: x["created_at"], reverse=True)
+    return result[skip : skip + limit]
 
 
 @router.get("/{run_id}")
