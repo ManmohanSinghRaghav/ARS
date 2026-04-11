@@ -14,6 +14,10 @@ const firebaseConfig = {
 };
 
 console.log("Firebase App Initializing...");
+console.log("Full import.meta.env:", import.meta.env);
+console.log("Firebase Config:", firebaseConfig);
+console.log("API Key value:", import.meta.env.VITE_FIREBASE_API_KEY);
+console.log("Auth Domain value:", import.meta.env.VITE_FIREBASE_AUTH_DOMAIN);
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
