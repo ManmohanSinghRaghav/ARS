@@ -8,6 +8,8 @@ from typing import Optional
 
 class SettingsUpdate(BaseModel):
     llm_backend: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
     mlx_model: Optional[str] = None
     ollama_model: Optional[str] = None
     ollama_url: Optional[str] = None
@@ -16,6 +18,8 @@ class SettingsUpdate(BaseModel):
 
 class SettingsResponse(BaseModel):
     llm_backend: str
+    gemini_api_key_set: bool
+    groq_api_key_set: bool
     mlx_model: str
     ollama_model: str
     ollama_url: str

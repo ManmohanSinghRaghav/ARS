@@ -4,7 +4,7 @@ Uses Firestore instead of SQLAlchemy.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from typing import List
 
 from app.database import get_db
@@ -13,6 +13,7 @@ from app.schemas.run import RunCreate
 from app.pipeline.runner import run_pipeline
 from app.pipeline.progress import get_steps
 from app.config import get_settings
+from app.security.crypto import decrypt_str
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
 
@@ -23,13 +24,23 @@ def _get_user_llm_config(user: User, db) -> tuple[dict, str]:
     doc = db.collection("user_settings").document(user.id).get()
     us = doc.to_dict() if doc.exists else {}
 
+    def _dec(field: str) -> str:
+        try:
+            return decrypt_str(us.get(field))
+        except Exception as e:
+            # If decryption fails, treat as unset so runs don't crash unexpectedly.
+            print(f"[Runs] Warning: failed to decrypt setting '{field}' for user {user.id}: {e}")
+            return ""
+
     llm_config = {
         "llm_backend": (us.get("llm_backend") if us.get("llm_backend") else "") or settings.LLM_BACKEND,
+        "gemini_api_key": (_dec("gemini_api_key") if us.get("gemini_api_key") else "") or settings.GEMINI_API_KEY,
+        "groq_api_key": (_dec("groq_api_key") if us.get("groq_api_key") else "") or settings.GROQ_API_KEY,
         "mlx_model": (us.get("mlx_model") if us.get("mlx_model") else "") or settings.MLX_MODEL,
         "ollama_model": (us.get("ollama_model") if us.get("ollama_model") else "") or settings.OLLAMA_MODEL,
         "ollama_url": (us.get("ollama_url") if us.get("ollama_url") else "") or settings.OLLAMA_URL,
     }
-    tavily_key = (us.get("tavily_api_key") if us.get("tavily_api_key") else "") or settings.TAVILY_API_KEY
+    tavily_key = (_dec("tavily_api_key") if us.get("tavily_api_key") else "") or settings.TAVILY_API_KEY
 
     return llm_config, tavily_key
 
@@ -45,6 +56,12 @@ def start_run(
         raise HTTPException(status_code=400, detail="Topic cannot be empty")
 
     llm_config, tavily_key = _get_user_llm_config(current_user, db)
+    
+    # Inject user vibe and commands
+    if payload.vibe:
+        llm_config["vibe"] = payload.vibe
+    if payload.commands:
+        llm_config["commands"] = payload.commands
 
     run_data = run_pipeline(
         topic=payload.topic.strip(),
@@ -148,6 +165,53 @@ def download_paper(
         content=run.get("paper_markdown"),
         media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.md"'},
+    )
+
+
+@router.get("/{run_id}/paper.pdf")
+def download_paper_pdf(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Download the research paper as a PDF file."""
+    doc = db.collection("runs").document(run_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    paper_md = run.get("paper_markdown") or ""
+    if not paper_md:
+        raise HTTPException(status_code=404, detail="No paper available for this run")
+
+    # Generate a simple PDF. We use core fonts (Latin-1); unsupported characters
+    # are dropped to ensure generation succeeds without bundling extra fonts.
+    from fpdf import FPDF
+
+    topic = (run.get("topic") or "Research Paper").strip()
+    pdf = FPDF(unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=16)
+    pdf.multi_cell(0, 8, text=topic)
+    pdf.ln(2)
+    pdf.set_font("Courier", size=10)
+
+    safe_text = paper_md.encode("latin-1", "ignore").decode("latin-1")
+    pdf.multi_cell(0, 5, text=safe_text)
+
+    out = pdf.output(dest="S")
+    if isinstance(out, (bytes, bytearray)):
+        pdf_bytes = bytes(out)
+    else:
+        pdf_bytes = out.encode("latin-1", "ignore")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.pdf"'},
     )
 
 

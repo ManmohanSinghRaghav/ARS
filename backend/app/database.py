@@ -1,6 +1,4 @@
-"""
-Firebase initialization and Firestore database client.
-"""
+"""Firebase initialization and Firestore database client."""
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -33,6 +31,13 @@ except Exception as e:
 
 def get_db():
     """FastAPI dependency — yields the Firestore client."""
+    from fastapi import HTTPException
+
+    if db_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore client is not initialized. Check FIREBASE_SERVICE_ACCOUNT_PATH and Firebase Admin config.",
+        )
     yield db_client
 
 def create_tables():

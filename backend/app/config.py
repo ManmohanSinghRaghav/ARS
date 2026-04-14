@@ -19,11 +19,20 @@ class Settings(BaseSettings):
     # Managed securely via Firebase natively
 
     # ── LLM defaults (overridable per-user via settings API) ──
-    LLM_BACKEND: str = ""
+    LLM_BACKEND: str = "gemini"
+    GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
     MLX_MODEL: str = "mlx-community/Qwen2.5-3B-Instruct-bf16"
     OLLAMA_MODEL: str = "qwen2.5:3b"
     OLLAMA_URL: str = "http://localhost:11434"
     TAVILY_API_KEY: str = ""
+    MODAL_TOKEN_ID: str = ""
+    MODAL_TOKEN_SECRET: str = ""
+
+    # ── Secrets at rest ──
+    # Server secret used to encrypt per-user API keys stored in Firestore.
+    # If unset, encryption is disabled and encrypted values cannot be decrypted.
+    SETTINGS_ENCRYPTION_KEY: str = ""
 
     # ── Outputs ──
     OUTPUTS_DIR: str = str(BACKEND_DIR / "outputs")

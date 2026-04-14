@@ -48,13 +48,12 @@ ARS/
 │       ├── models/       # ORM models (User, Run, Settings)
 │       ├── schemas/      # Pydantic request/response schemas
 │       ├── routers/      # API endpoints (auth, runs, settings)
-│       └── pipeline/     # LangGraph research pipeline
-│           ├── graph.py  # StateGraph builder
-│           ├── nodes.py  # 10 agent node functions
-│           ├── runner.py # Pipeline orchestrator
-│           ├── llm.py    # LLM dispatcher (MLX/Ollama)
-│           ├── helpers.py
-│           └── state.py  # AgentState TypedDict
+│       └── pipeline/     # CrewAI research pipeline
+│           ├── crew.py        # CrewAI agents + tasks
+│           ├── runner.py      # Background runner + persistence
+│           ├── llm_factory.py # Tiered LLM dispatcher
+│           ├── tools.py       # Search + sandbox execution tools
+│           └── progress.py    # In-memory progress events
 └── frontend/
     ├── package.json
     ├── vite.config.ts
@@ -64,7 +63,7 @@ ARS/
         ├── api/          # Axios client with JWT
         ├── auth/         # AuthContext & ProtectedRoute
         ├── pages/        # Dashboard, RunDetail, History, Settings
-        └── components/   # Navbar, Spinner, RunCard, etc.
+        └── components/   # Navbar, RunCard, etc.
 ```
 
 ## Requirements
@@ -150,20 +149,23 @@ docker run --rm -p 8000:8000 \
 
 ## Configuration
 
-All settings are in `backend/.env` (copy from `.env.example`):
+All settings are in `.env` at the project root (copy from `.env.example`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:///./ars.db` | Database connection |
-| `SECRET_KEY` | *(change me)* | JWT signing secret |
-| `TAVILY_API_KEY` | *(required)* | Web search API key |
-| `LLM_BACKEND` | auto-detect | `mlx` (macOS) or `ollama` |
-| `MLX_MODEL` | `mlx-community/Qwen2.5-3B-Instruct-bf16` | MLX model ID |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | `service-account.json` | Firebase Admin service account path |
+| `TAVILY_API_KEY` | *(optional)* | Web search API key (enables Tavily results) |
+| `LLM_BACKEND` | `gemini` | `gemini`, `ollama`, or `mlx` |
+| `GEMINI_API_KEY` | *(optional)* | Gemini API key (required if `LLM_BACKEND=gemini`) |
+| `GROQ_API_KEY` | *(optional)* | Groq API key (used for fast routing tier) |
 | `OLLAMA_MODEL` | `qwen2.5:3b` | Ollama model tag |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
+| `MLX_MODEL` | `mlx-community/Qwen2.5-3B-Instruct-bf16` | MLX model ID (macOS only) |
+| `MODAL_TOKEN_ID` | *(optional)* | Modal token id (enables Modal sandbox execution) |
+| `MODAL_TOKEN_SECRET` | *(optional)* | Modal token secret |
 
 ## Known Limitations
 
-- **Code execution is unsandboxed** — LLM-generated code runs with full system access via `subprocess`. Use in a VM or container if concerned about safety.
-- **3B model quality** — Qwen2.5-3B produces reasonable but not state-of-the-art results. For better output, use a larger model (e.g., `qwen2.5:14b` via Ollama).
-- **Blocking pipeline** — Research runs are synchronous (5-30 min). The frontend shows a spinner during execution.
+- **Sandbox depends on configuration** — If Modal credentials are not set, code execution falls back to the local sandbox tool.
+- **Model quality** — Smaller models (e.g., 3B) may produce weaker hypotheses/papers; use larger models for better results.
+- **Progress is ephemeral** — Progress is tracked in-memory and is cleared shortly after completion.

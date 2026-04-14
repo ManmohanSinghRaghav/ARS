@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 
 interface RunCardProps {
-  id: number;
+  id: string;
   topic: string;
   status: string;
   paperWordCount: number;

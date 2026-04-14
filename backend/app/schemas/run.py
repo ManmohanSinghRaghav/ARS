@@ -9,11 +9,13 @@ from pydantic import BaseModel
 
 class RunCreate(BaseModel):
     topic: str
+    vibe: Optional[str] = "Deep Academic"
+    commands: Optional[str] = ""
 
 
 class RunResponse(BaseModel):
-    id: int
-    user_id: int
+    id: str
+    user_id: str
     topic: str
     status: str
     hypothesis: str
@@ -29,7 +31,7 @@ class RunResponse(BaseModel):
 
 
 class RunListItem(BaseModel):
-    id: int
+    id: str
     topic: str
     status: str
     paper_word_count: int = 0

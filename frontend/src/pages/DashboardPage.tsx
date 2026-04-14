@@ -5,7 +5,7 @@ import RunCard from '../components/RunCard';
 import toast from 'react-hot-toast';
 
 interface RunListItem {
-  id: number;
+  id: string;
   topic: string;
   status: string;
   paper_word_count: number;
@@ -19,7 +19,7 @@ interface ProgressStep {
   title: string;
   status: string;
   detail: string;
-  ts: string;
+  timestamp: string;
 }
 
 const STEP_LABELS: Record<number, string> = {
@@ -61,8 +61,10 @@ function StepIcon({ status }: { status: string }) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [topic, setTopic] = useState('');
+  const [vibe, setVibe] = useState('Deep Academic');
+  const [commands, setCommands] = useState('');
   const [running, setRunning] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [recentRuns, setRecentRuns] = useState<RunListItem[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
@@ -86,7 +88,7 @@ export default function DashboardPage() {
     }
   };
 
-  const startPolling = (runId: number) => {
+  const startPolling = (runId: string) => {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
       try {
@@ -131,7 +133,7 @@ export default function DashboardPage() {
     setRunning(true);
     setSteps([]);
     try {
-      const res = await runsAPI.create(t);
+      const res = await runsAPI.create(t, vibe, commands.trim());
       const runId = res.data.id;
       setActiveRunId(runId);
       startPolling(runId);
@@ -152,24 +154,52 @@ export default function DashboardPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8">
         <h1 className="text-2xl font-bold text-gray-800 mb-2">Start New Research</h1>
         <p className="text-gray-500 mb-6">
-          Enter a research topic and the ARS pipeline will search, hypothesize, experiment, and
-          write a full paper.
+          Enter a research topic, constraints, and vibe. The intent architect will verify claims using a multi-agent swarm.
         </p>
-        <form onSubmit={handleSubmit} className="flex gap-3">
-          <input
-            type="text"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            placeholder="e.g., Efficient memory management in LLMs via Sparse Attention"
-            className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all"
-            disabled={running}
-          />
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Research Topic</label>
+            <input
+              type="text"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="e.g., Explain sparse attention mechanisms in LLMs"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all"
+              disabled={running}
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Agent Vibe</label>
+              <select
+                value={vibe}
+                onChange={(e) => setVibe(e.target.value)}
+                disabled={running}
+                className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
+              >
+                <option value="Deep Academic">Deep Academic</option>
+                <option value="Fast-Paced Prototype">Fast-Paced Prototype</option>
+                <option value="Adversarial Audit">Adversarial Audit</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Input Commands / Constraints</label>
+              <input
+                type="text"
+                value={commands}
+                onChange={(e) => setCommands(e.target.value)}
+                placeholder="e.g., Focus only on causal modeling limits"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
+                disabled={running}
+              />
+            </div>
+          </div>
           <button
             type="submit"
             disabled={running}
-            className="px-6 py-3 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+            className="mt-2 w-full py-3 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors"
           >
-            {running ? 'Running...' : 'Start Research'}
+            {running ? 'Swarm Initializing...' : 'Initialize Mission'}
           </button>
         </form>
       </div>

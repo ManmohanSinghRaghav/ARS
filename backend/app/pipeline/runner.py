@@ -3,7 +3,6 @@ Pipeline runner — orchestrates a full ARS research run and persists results to
 Runs the pipeline in a background thread so the API responds immediately.
 """
 
-import hashlib
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -11,8 +10,8 @@ from typing import Optional
 
 from app.pipeline.crew import run_crew_pipeline
 from app.pipeline.progress import add_step, clear as clear_progress
+from app.pipeline.runtime_context import set_tavily_api_key
 from app.config import get_settings
-from app.database import get_db
 
 def run_pipeline(topic: str, user_id: str, db,
                  llm_config: Optional[dict] = None,
@@ -61,9 +60,13 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
                       default_mlx: str, default_ollama: str):
     """Background thread: runs the full pipeline and updates the DB record."""
     from app.database import db_client
+    if db_client is None:
+        print("[Pipeline] Firestore client unavailable; aborting background run.")
+        return
     run_ref = db_client.collection("runs").document(run_id)
 
     try:
+        set_tavily_api_key(tavily_api_key)
         add_step(run_id, 0, 10, "Initializing CrewAI pipeline", "running")
 
         # Kickoff Crew
@@ -92,6 +95,7 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "llm_backend": backend,
                 "model": model_name,
+                **result.get("summary_data", {})
             },
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -99,7 +103,7 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
     except Exception as e:
         run_ref.update({
             "status": "failed",
-            "error_message": f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+            "error_message": f"{type(e).__name__}: {e}",
         })
         add_step(run_id, 0, 10, f"Pipeline failed: {e}", "error")
         print(f"[Pipeline] FAILED: {e}")

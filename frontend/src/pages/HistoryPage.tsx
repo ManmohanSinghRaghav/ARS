@@ -3,7 +3,7 @@ import { runsAPI } from '../api/client';
 import RunCard from '../components/RunCard';
 
 interface RunListItem {
-  id: number;
+  id: string;
   topic: string;
   status: string;
   paper_word_count: number;

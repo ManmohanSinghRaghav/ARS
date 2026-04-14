@@ -9,6 +9,7 @@ from app.database import get_db
 from app.auth.dependencies import User, get_current_user
 from app.schemas.config import SettingsUpdate, SettingsResponse
 from app.config import get_settings
+from app.security.crypto import encrypt_str
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
@@ -32,7 +33,9 @@ def get_user_settings(
     us = _get_or_create_settings(current_user, db)
 
     return SettingsResponse(
-        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "ollama",
+        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
+        gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
+        groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
         mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
         ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,
         ollama_url=us.get("ollama_url") or defaults.OLLAMA_URL,
@@ -52,9 +55,13 @@ def update_user_settings(
     us = _get_or_create_settings(current_user, db)
 
     if payload.llm_backend is not None:
-        if payload.llm_backend not in ("mlx", "ollama", ""):
-            raise HTTPException(status_code=400, detail="llm_backend must be 'mlx', 'ollama', or ''")
+        if payload.llm_backend not in ("mlx", "ollama", "gemini", ""):
+            raise HTTPException(status_code=400, detail="llm_backend must be 'mlx', 'ollama', 'gemini', or ''")
         us["llm_backend"] = payload.llm_backend
+    if payload.gemini_api_key is not None:
+        us["gemini_api_key"] = encrypt_str(payload.gemini_api_key)
+    if payload.groq_api_key is not None:
+        us["groq_api_key"] = encrypt_str(payload.groq_api_key)
     if payload.mlx_model is not None:
         us["mlx_model"] = payload.mlx_model
     if payload.ollama_model is not None:
@@ -62,12 +69,14 @@ def update_user_settings(
     if payload.ollama_url is not None:
         us["ollama_url"] = payload.ollama_url
     if payload.tavily_api_key is not None:
-        us["tavily_api_key"] = payload.tavily_api_key
+        us["tavily_api_key"] = encrypt_str(payload.tavily_api_key)
 
     doc_ref.set(us, merge=True)
 
     return SettingsResponse(
-        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "ollama",
+        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
+        gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
+        groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
         mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
         ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,
         ollama_url=us.get("ollama_url") or defaults.OLLAMA_URL,

@@ -47,12 +47,13 @@ export const authAPI = {
 };
 
 export const runsAPI = {
-  create: (topic: string) => client.post('/runs', { topic }),
+  create: (topic: string, vibe: string = 'Deep Academic', commands: string = '') => client.post('/runs', { topic, vibe, commands }),
   list: (skip = 0, limit = 20) => client.get(`/runs?skip=${skip}&limit=${limit}`),
-  get: (id: number) => client.get(`/runs/${id}`),
-  progress: (id: number) => client.get(`/runs/${id}/progress`),
-  downloadPaper: (id: number) => client.get(`/runs/${id}/paper`, { responseType: 'text' }),
-  delete: (id: number) => client.delete(`/runs/${id}`),
+  get: (id: string) => client.get(`/runs/${id}`),
+  progress: (id: string) => client.get(`/runs/${id}/progress`),
+  downloadPaper: (id: string) => client.get(`/runs/${id}/paper`, { responseType: 'text' }),
+  downloadPaperPdf: (id: string) => client.get(`/runs/${id}/paper.pdf`, { responseType: 'blob' }),
+  delete: (id: string) => client.delete(`/runs/${id}`),
 };
 
 export const settingsAPI = {

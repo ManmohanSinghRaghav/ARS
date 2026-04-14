@@ -6,8 +6,8 @@ import CodeBlock from '../components/CodeBlock';
 import toast from 'react-hot-toast';
 
 interface RunDetail {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   topic: string;
   status: string;
   hypothesis: string;
@@ -27,12 +27,12 @@ export default function RunDetailPage() {
   const navigate = useNavigate();
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab>('paper');
+  const [activeTab, setActiveTab] = useState<Tab | 'grounding'>('paper');
 
   useEffect(() => {
     if (!id) return;
     runsAPI
-      .get(Number(id))
+      .get(id)
       .then((res) => setRun(res.data))
       .catch(() => {
         toast.error('Run not found');
@@ -57,6 +57,22 @@ export default function RunDetailPage() {
     }
   };
 
+  const handleDownloadPdf = async () => {
+    if (!run) return;
+    try {
+      const res = await runsAPI.downloadPaperPdf(run.id);
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `paper_${run.id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to download PDF');
+    }
+  };
+
   const handleDelete = async () => {
     if (!run || !confirm('Are you sure you want to delete this run?')) return;
     try {
@@ -78,12 +94,13 @@ export default function RunDetailPage() {
 
   if (!run) return null;
 
-  const tabs: { key: Tab; label: string }[] = [
+  const tabs: { key: Tab | 'grounding'; label: string }[] = [
     { key: 'paper', label: 'Paper' },
     { key: 'hypothesis', label: 'Hypothesis' },
     { key: 'code', label: 'Code' },
     { key: 'output', label: 'Execution Output' },
-    { key: 'summary', label: 'Summary' },
+    { key: 'grounding', label: 'Grounding Card (Verifier)' },
+    { key: 'summary', label: 'Telemetry & Infrastructure' },
   ];
 
   const statusColors: Record<string, string> = {
@@ -111,12 +128,20 @@ export default function RunDetailPage() {
         </div>
         <div className="flex gap-2">
           {run.paper_markdown && (
-            <button
-              onClick={handleDownload}
-              className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
-            >
-              Download Paper
-            </button>
+            <>
+              <button
+                onClick={handleDownload}
+                className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
+              >
+                Download Paper
+              </button>
+              <button
+                onClick={handleDownloadPdf}
+                className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
+              >
+                Download PDF
+              </button>
+            </>
           )}
           <button
             onClick={handleDelete}
@@ -167,22 +192,44 @@ export default function RunDetailPage() {
         {activeTab === 'code' && <CodeBlock code={run.generated_code} />}
 
         {activeTab === 'output' && (
-          <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto text-sm font-mono whitespace-pre-wrap">
-            {run.execution_output || 'No execution output.'}
-          </pre>
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-800">AgentTrace Execution Log</h3>
+            <p className="text-sm text-gray-500 mb-2">Internal Sandbox STDOUT/STDERR captured during the OODA "Karpathy Move" validation.</p>
+            <pre className="bg-gray-900 border border-gray-700 text-green-400 p-5 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap shadow-inner leading-relaxed">
+              {run.execution_output || '[Execution Trace Empty]'}
+            </pre>
+          </div>
+        )}
+
+        {activeTab === 'grounding' && (
+          <div className="space-y-4 text-sm">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">RefLens Verification Card (JSON Trace)</h3>
+            <p className="text-gray-500 mb-4">Atomic Claims mapped to Grounding Spans (extracted from PDF/Web endpoints).</p>
+            {run.summary_json && run.summary_json.grounding ? (
+              <pre className="bg-gray-50 border-l-4 border-primary-500 text-gray-800 p-5 rounded font-mono text-sm whitespace-pre-wrap shadow-sm">
+                {typeof run.summary_json.grounding === 'object' 
+                  ? JSON.stringify(run.summary_json.grounding, null, 2) 
+                  : run.summary_json.grounding}
+              </pre>
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg text-yellow-800 italic">
+                No formal Grounding Card was extracted for this run. Run might have halted early or Verifier JSON parsing failed.
+              </div>
+            )}
+          </div>
         )}
 
         {activeTab === 'summary' && (
           <div className="space-y-3">
             {run.summary_json && Object.keys(run.summary_json).length > 0 ? (
-              <table className="w-full">
+              <table className="w-full text-left">
                 <tbody>
-                  {Object.entries(run.summary_json).map(([key, value]) => (
+                  {Object.entries(run.summary_json).filter(([key]) => key !== 'grounding').map(([key, value]) => (
                     <tr key={key} className="border-b border-gray-100">
-                      <td className="py-2.5 pr-4 text-sm font-medium text-gray-600 w-48">
+                      <td className="py-2.5 pr-4 text-sm font-medium text-gray-600 w-48 align-top">
                         {key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
                       </td>
-                      <td className="py-2.5 text-sm text-gray-800">
+                      <td className="py-2.5 text-sm text-gray-800 break-words">
                         {typeof value === 'object' ? JSON.stringify(value) : String(value)}
                       </td>
                     </tr>
@@ -190,7 +237,7 @@ export default function RunDetailPage() {
                 </tbody>
               </table>
             ) : (
-              <span className="text-gray-400 italic">No summary data available.</span>
+              <span className="text-gray-400 italic">No telemetry data available.</span>
             )}
           </div>
         )}
