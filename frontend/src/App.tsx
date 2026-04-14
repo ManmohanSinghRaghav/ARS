@@ -2,7 +2,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import ProtectedRoute from './auth/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import RunDetailPage from './pages/RunDetailPage';
 import HistoryPage from './pages/HistoryPage';
@@ -13,11 +12,12 @@ function App() {
   const { user } = useAuth();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className={`min-h-screen relative overflow-x-hidden ${user ? "ocean-bg text-[#f6f6fc] font-['Manrope',_sans-serif]" : "bg-gray-50"}`}>
       {user && <Navbar />}
-      <Routes>
+      <main className={user ? "ml-32 mr-12 pt-24 pb-12" : ""}>
+        <Routes>
         <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-        <Route path="/register" element={user ? <Navigate to="/" /> : <RegisterPage />} />
+        <Route path="/register" element={user ? <Navigate to="/" /> : <LoginPage />} />
         <Route
           path="/"
           element={
@@ -52,6 +52,7 @@ function App() {
         />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
+      </main>
     </div>
   );
 }

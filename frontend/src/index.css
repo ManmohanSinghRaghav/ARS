@@ -3,7 +3,28 @@
 @tailwind utilities;
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif;
+  background-color: #0c0e12;
+  color: #f6f6fc;
+}
+
+.ocean-bg {
+  background: radial-gradient(circle at 50% -20%, #1d2025 0%, #0c0e12 100%);
+  background-color: #0c0e12;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.glass-card {
+  background: rgba(35, 38, 44, 0.6);
+  backdrop-filter: blur(20px);
+}
+
+.liquid-progress {
+  background: linear-gradient(135deg, #a1faff 0%, #00f4fe 100%);
+  box-shadow: 0 0 20px rgba(0, 244, 254, 0.3);
 }
 
 /* Custom scrollbar */
