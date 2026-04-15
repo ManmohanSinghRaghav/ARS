@@ -1,13 +1,28 @@
 """
 CrewAI Orchestration pipeline.
 Replaces LangChain/LangGraph completely.
+Integrates ChromaDB RAG for grounding span indexing and semantic retrieval.
 """
 import os
 import json
+import litellm
 from crewai import Agent, Task, Crew, Process
 from app.pipeline.tools import search_literature, sandbox_execute
 from app.pipeline.llm_factory import get_tier_llm
 from app.pipeline.progress import add_step
+from app.pipeline.rag import index_grounding_spans
+
+# --- Initialize Global LLM API Caching ---
+redis_url = os.environ.get("REDIS_URL")
+if redis_url:
+    try:
+        litellm.cache = litellm.Cache(type="redis", url=redis_url)
+        print("[CrewAI] Redis LLM Cache enabled.")
+    except Exception as e:
+        print(f"[CrewAI] Redis initialization failed: {e}. Falling back to default.")
+else:
+    litellm.cache = litellm.Cache(type="disk")
+    print("[CrewAI] Disk LLM Cache enabled.")
 
 def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -> dict:
     """
@@ -23,7 +38,6 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     reasoning_llm = get_tier_llm("reasoning", llm_config)
     extraction_llm = get_tier_llm("extraction", llm_config)
     critic_llm = get_tier_llm("critic", llm_config)
-    router_llm = get_tier_llm("router", llm_config)
 
     # Helper function to report to UI
     def _progress(step: int, title: str, status: str = "running", detail: str = ""):
@@ -100,37 +114,46 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     )
 
     # ==========================================
-    # TASKS
+    # TASKS (Turbo Pipeline)
     # ==========================================
     
     task_research = Task(
         description=f"Parse the research topic: '{topic}'. Keep these sub-commands in mind: {user_commands}. Use tools to mine ArXiv/Web. Extract verbatim 'Grounding Spans' and metadata.",
         expected_output="A structured output mapping 3 major gaps and verbatim grounding spans extracted from literature.",
         agent=researcher,
+        async_execution=False
     )
-    
+
     task_hypothesis = Task(
         description=f"Review the researcher's extracted spans and any user constraints: {user_commands}. Formulate a SINGLE falsifiable hypothesis using System 2 reasoning.",
         expected_output="A mathematically or computationally testable hypothesis statement, justifying novelty.",
         agent=lead_scientist,
+        context=[task_research],
+        async_execution=False
     )
 
     task_experiment = Task(
         description="Write an E2B/Modal sandbox Python script testing the hypothesis. Execute it. If it fails, read STDERR, do the 'Karpathy Move' and fix it.",
         expected_output="The final working Python code, along with stdout metrics proving/disproving the claim.",
         agent=ml_engineer,
+        context=[task_hypothesis],
+        async_execution=False
     )
 
     task_verify = Task(
         description="Verify the experiment outputs and hypothesis claims against the researcher's grounding spans. Output MUST be a STRICT JSON array of objects with keys: {'claim': string, 'evidence_span': string, 'status': 'Verified' | 'Speculative'}.",
         expected_output="A JSON array of formal 'Grounding Card' objects mapping each atomic claim to verbatim quotes. If confidence < 90%, mark 'Speculative'.",
         agent=verifier,
+        context=[task_research, task_hypothesis, task_experiment],
+        async_execution=False  # Gating synchronization point
     )
 
     task_writing = Task(
         description=f"Compile all verified claims, code, and findings into a strict '{target_vibe}' Markdown Research Paper. Include LaTeX formulas (e.g., $E=mc^2$). DO NOT include 'Speculative' claims.",
         expected_output="A complete, professional markdown string representing the final generated Paper.",
         agent=academic_writer,
+        context=[task_verify],
+        async_execution=False
     )
 
     def task_research_cb(*args): _progress(2, "Extraction Engine Completed (Grounding Spans Mined)", "done")
@@ -191,6 +214,28 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
                  summary_data = {"grounding": json.loads(raw_vid)}
     except:
         summary_data = {"grounding": task_verify.output.raw_content if task_verify.output else "FAILED JSON PARSE"}
+
+    # Index grounding spans into ChromaDB for semantic retrieval and verification
+    try:
+        if task_verify.output and task_verify.output.raw_content:
+            raw_vid = task_verify.output.raw_content
+            json_block = raw_vid[raw_vid.find('['):raw_vid.rfind(']')+1]
+            if json_block:
+                grounding_cards = json.loads(json_block)
+                # Extract spans from grounding cards
+                grounding_spans = [
+                    {
+                        "text": card.get("evidence_span", ""),
+                        "source": card.get("claim", ""),
+                        "url": ""
+                    }
+                    for card in grounding_cards if isinstance(card, dict) and card.get("evidence_span")
+                ]
+                if grounding_spans:
+                    index_grounding_spans(run_id, topic, grounding_spans)
+                    print(f"[CrewAI] Indexed {len(grounding_spans)} grounding spans into ChromaDB")
+    except Exception as e:
+        print(f"[CrewAI] Warning: Failed to index grounding spans: {e}")
 
     return {
         "final_paper": str(final_paper),

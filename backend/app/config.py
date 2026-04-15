@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # If unset, encryption is disabled and encrypted values cannot be decrypted.
     SETTINGS_ENCRYPTION_KEY: str = ""
 
+    # ── Firebase Storage ──
+    FIREBASE_STORAGE_BUCKET: str = ""
+
+    # ── Vector Store & RAG (ChromaDB) ──
+    CHROMA_ENABLED: bool = False
+    CHROMA_HOST: str = ""
+    CHROMA_PORT: int = 8000
+    CHROMA_API_KEY: str = ""
+
     # ── Outputs ──
     OUTPUTS_DIR: str = str(BACKEND_DIR / "outputs")
 

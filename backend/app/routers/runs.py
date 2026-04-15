@@ -151,18 +151,42 @@ def download_paper(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """Download the research paper as a Markdown file."""
+    """Download the research paper as a Markdown file from Storage (if configured) or Firestore."""
     doc = db.collection("runs").document(run_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Run not found")
     run = doc.to_dict()
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
-    if not run.get("paper_markdown"):
+    
+    from app.config import get_settings
+    from app.database import get_storage_bucket
+    
+    settings = get_settings()
+    paper_markdown = ""
+    
+    # Try to fetch from storage if bucket is configured
+    if settings.FIREBASE_STORAGE_BUCKET:
+        storage_bucket = get_storage_bucket()
+        if storage_bucket:
+            try:
+                blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
+                paper_markdown = blob.download_as_string(raw_download=False).decode("utf-8")
+                print(f"[Runs] Paper retrieved from Storage: runs/{run_id}/paper.md")
+            except Exception as e:
+                print(f"[Runs] Warning: Failed to fetch paper from storage: {e}. Falling back to Firestore.")
+                paper_markdown = run.get("paper_markdown", "")
+        else:
+            paper_markdown = run.get("paper_markdown", "")
+    else:
+        # Fallback to Firestore if storage not configured
+        paper_markdown = run.get("paper_markdown", "")
+    
+    if not paper_markdown:
         raise HTTPException(status_code=404, detail="No paper available for this run")
 
     return PlainTextResponse(
-        content=run.get("paper_markdown"),
+        content=paper_markdown,
         media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.md"'},
     )

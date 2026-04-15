@@ -1,0 +1,36 @@
+# Testing Dependencies for ARS Backend
+# Install with: pip install -r requirements-test.txt
+
+# Core Testing Framework
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+pytest-timeout==2.2.0
+pytest-xdist==3.5.0
+
+# Mocking and Fixtures
+faker==20.1.0
+
+# API Testing
+httpx>=0.27.0
+requests>=2.32.0
+
+# Code Quality
+coverage==7.3.2
+pytest-html==4.1.1
+
+# Async Testing
+asyncio==3.4.3
+
+# Optional: Parallel Execution
+# pytest-xdist==3.5.0  # Already included above
+
+# Optional: Better Assertions
+pytest-clarity==1.0.1
+
+# Optional: Performance Testing
+pytest-benchmark==4.0.0
+
+# Optional: CI/CD Integration
+pytest-github-actions-annotate-failures==0.2.0

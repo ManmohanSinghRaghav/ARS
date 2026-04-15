@@ -166,6 +166,6 @@ All settings are in `.env` at the project root (copy from `.env.example`):
 
 ## Known Limitations
 
-- **Sandbox depends on configuration** — If Modal credentials are not set, code execution falls back to the local sandbox tool.
+- **Sandbox requires Modal** — Missing Modal credentials will result in failed execution steps (with clear errors). There is no local code execution fallback for security reasons.
 - **Model quality** — Smaller models (e.g., 3B) may produce weaker hypotheses/papers; use larger models for better results.
 - **Progress is ephemeral** — Progress is tracked in-memory and is cleared shortly after completion.

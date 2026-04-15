@@ -3,10 +3,37 @@ CrewAI custom tools wrapper for ARS.
 """
 
 import os
+import hashlib
+import json
 from crewai.tools import tool
 from typing import List
 
 from app.pipeline.runtime_context import get_tavily_api_key
+
+# Optional Redis Cache
+REDIS_URL = os.environ.get("REDIS_URL")
+_redis_client = None
+if REDIS_URL:
+    try:
+        import redis
+        _redis_client = redis.from_url(REDIS_URL)
+    except ImportError:
+        pass
+
+def _get_cache(key: str) -> str | None:
+    if _redis_client:
+        try:
+            return _redis_client.get(key)
+        except Exception:
+            return None
+    return None
+
+def _set_cache(key: str, val: str):
+    if _redis_client:
+        try:
+            _redis_client.setex(key, 86400, val) # 1 day cache
+        except Exception:
+            pass
 
 # Tool 1: Literature Search (Arxiv & Tavily)
 @tool("LiteratureSearchTool")
@@ -15,6 +42,13 @@ def search_literature(topic: str) -> str:
     Search ArXiv and Tavily Web Search for scientific papers and articles on a specific topic.
     Always input a precise phrase representing the core topic of your research.
     """
+    
+    # Check cache
+    cache_key = f"search_cache:{hashlib.md5(topic.encode('utf-8')).hexdigest()}"
+    cached_val = _get_cache(cache_key)
+    if cached_val:
+        return cached_val.decode('utf-8') if isinstance(cached_val, bytes) else cached_val
+
     docs: List[str] = []
     
     # Attempt ArXiv Search
@@ -48,9 +82,12 @@ def search_literature(topic: str) -> str:
         docs.append("[Web search skipped: TAVILY_API_KEY missing]")
 
     if not docs:
-        return "No external sources generated. Rely on internal model knowledge."
-    
-    return "\n\n---\n\n".join(docs)
+        result_str = "No external sources generated. Rely on internal model knowledge."
+    else:
+        result_str = "\n\n---\n\n".join(docs)
+        
+    _set_cache(cache_key, result_str)
+    return result_str
 
 
 # Tool 2: Code Execution Simulator (Modal MicroVM)
@@ -83,43 +120,30 @@ sys.addaudithook(strict_audit_hook)
 
     try:
         # Connect to Modal (requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in env)
-        if os.getenv("MODAL_TOKEN_ID"):
-            import modal
-            
-            # Spin up a completely ephemeral Modal Sandbox with required ML dependencies
-            app = modal.App("ars-agent-sandbox")
-            image = modal.Image.debian_slim().pip_install("numpy", "torch", "pandas", "scipy")
-            
-            # Modal Sandbox programmatic execution
-            sandbox = modal.Sandbox.create(
-                app=app,
-                image=image,
-                cmd=["python", "-c", python_code],
-                timeout=120
-            )
-            sandbox.wait()
-            
-            stdout = sandbox.stdout.read()
-            stderr = sandbox.stderr.read()
-            
-            if sandbox.returncode != 0 or stderr:
-                 return f"EXPERIMENTAL RUN FAILED.\n\nReturn Code: {sandbox.returncode}\nSTDERR:\n{stderr}\n\nSTDOUT:\n{stdout}"
-            return f"EXPERIMENT SUCCEEDED.\n\nSTDOUT:\n{stdout}"
+        if not os.getenv("MODAL_TOKEN_ID") or not os.getenv("MODAL_TOKEN_SECRET"):
+            return "EXPERIMENTAL RUN FAILED.\n\nModal Sandbox is not configured. Please set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in the environment to enable secure code execution."
 
-        # Fallback to local process/hopx if modal keys missing
-        import hopx_ai
-        sandbox = hopx_ai.Sandbox.create(template="base")
-        result = sandbox.run_code(python_code)
+        import modal
         
-        stdout = result.stdout.strip() if hasattr(result, 'stdout') and result.stdout else ""
-        stderr = result.stderr.strip() if hasattr(result, 'stderr') and result.stderr else ""
+        # Spin up a completely ephemeral Modal Sandbox with required ML dependencies
+        app = modal.App.lookup("ars-agent-sandbox", create_if_missing=True)
+        image = modal.Image.debian_slim().pip_install("numpy", "torch", "pandas", "scipy")
         
-        sandbox.kill()
+        # Modal Sandbox programmatic execution
+        sandbox = modal.Sandbox.create(
+            "python", "-c", python_code,
+            app=app,
+            image=image,
+            timeout=120
+        )
+        sandbox.wait()
         
-        if stderr:
-             return f"EXPERIMENTAL RUN FAILED.\n\nSTDERR:\n{stderr}\n\nSTDOUT:\n{stdout}"
+        stdout = sandbox.stdout.read()
+        stderr = sandbox.stderr.read()
         
+        if sandbox.returncode != 0 or stderr:
+             return f"EXPERIMENTAL RUN FAILED.\n\nReturn Code: {sandbox.returncode}\nSTDERR:\n{stderr}\n\nSTDOUT:\n{stdout}"
         return f"EXPERIMENT SUCCEEDED.\n\nSTDOUT:\n{stdout}"
-        
+
     except Exception as e:
         return f"MODAL SANDBOX FATAL ERROR: {e}"

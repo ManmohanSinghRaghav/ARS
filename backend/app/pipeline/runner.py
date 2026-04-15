@@ -84,12 +84,25 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
         )
 
         # CrewAI returns the markdown paper, hypothesis overview, and execution run stats
+        paper_markdown = result.get("final_paper", "")
+        
+        # Upload paper to storage if bucket is configured
+        from app.database import get_storage_bucket
+        storage_bucket = get_storage_bucket()
+        if storage_bucket and paper_markdown:
+            try:
+                blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
+                blob.upload_from_string(paper_markdown, content_type="text/markdown")
+                print(f"[Pipeline] Paper uploaded to Storage: runs/{run_id}/paper.md")
+            except Exception as e:
+                print(f"[Pipeline] Warning: Failed to upload paper to storage: {e}")
+        
         run_ref.update({
             "status": "completed",
             "hypothesis": result.get("hypothesis", ""),
             "generated_code": "", # Removed explicitly to just rely on execution output logs
             "execution_output": result.get("execution_output", ""),
-            "paper_markdown": result.get("final_paper", ""),
+            "paper_markdown": paper_markdown,
             "summary_json": {
                 "topic": topic,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
