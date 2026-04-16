@@ -30,25 +30,47 @@ def get_chroma_client():
 
     try:
         if settings.CHROMA_HOST:
-            # Use remote Chroma server (Chroma Cloud / remote HTTP)
+            # Use remote Chroma server.
+            # If this is Chroma Cloud, prefer the first-party CloudClient API.
             parsed = urlparse(settings.CHROMA_HOST)
             host = parsed.netloc or parsed.path or settings.CHROMA_HOST
             ssl = (parsed.scheme == "https") or (settings.CHROMA_PORT == 443)
 
             headers = (
-                {"Authorization": f"Bearer {settings.CHROMA_API_KEY}"}
+                {"X-Chroma-Token": settings.CHROMA_API_KEY}
                 if settings.CHROMA_API_KEY
                 else {}
             )
 
-            _chroma_client = chromadb.HttpClient(
-                host=host,
-                port=settings.CHROMA_PORT,
-                ssl=ssl,
-                headers=headers,
-                tenant=settings.CHROMA_TENANT,
-                database=settings.CHROMA_DATABASE,
-            )
+            is_chroma_cloud = "trychroma.com" in host or "trychroma.com" in settings.CHROMA_HOST
+            if is_chroma_cloud:
+                try:
+                    _chroma_client = chromadb.CloudClient(
+                        api_key=settings.CHROMA_API_KEY,
+                        tenant=settings.CHROMA_TENANT,
+                        database=settings.CHROMA_DATABASE,
+                    )
+                except Exception as e:
+                    # Fallback to HTTP client when CloudClient isn't available in the installed chromadb build.
+                    print(f"[RAG] Warning: CloudClient init failed ({e}); falling back to HttpClient")
+                    _chroma_client = chromadb.HttpClient(
+                        host=host,
+                        port=settings.CHROMA_PORT,
+                        ssl=ssl,
+                        headers=headers,
+                        tenant=settings.CHROMA_TENANT,
+                        database=settings.CHROMA_DATABASE,
+                    )
+            else:
+                # Generic remote HTTP Chroma
+                _chroma_client = chromadb.HttpClient(
+                    host=host,
+                    port=settings.CHROMA_PORT,
+                    ssl=ssl,
+                    headers=headers,
+                    tenant=settings.CHROMA_TENANT,
+                    database=settings.CHROMA_DATABASE,
+                )
         else:
             # Use ephemeral/in-memory client for local development
             chroma_settings = ChromaSettings(
@@ -75,9 +97,19 @@ def get_rag_collection(collection_name: str = "research_grounding_spans"):
         return None
     
     try:
+        from chromadb.utils.embedding_functions import GoogleGenerativeAiEmbeddingFunction
+        from app.config import get_settings
+        settings = get_settings()
+        
+        # Use Gemini embeddings to avoid unstable local model downloads in threading
+        ef = GoogleGenerativeAiEmbeddingFunction(
+            api_key=settings.GEMINI_API_KEY or "dummy-key-fallback",
+        )
+        
         # Get or create collection with metadata for filtering
         collection = client.get_or_create_collection(
             name=collection_name,
+            embedding_function=ef,
             metadata={"hnsw:space": "cosine"},
         )
         _chroma_collection = collection
@@ -106,24 +138,44 @@ def index_grounding_spans(run_id: str, topic: str, grounding_spans: List[dict]):
         metadatas = []
         ids = []
         
+        import hashlib
+        
         for i, span in enumerate(grounding_spans):
-            doc_id = f"{run_id}_span_{i}"
-            documents.append(span.get("text", ""))
-            metadatas.append({
-                "run_id": run_id,
-                "topic": topic,
-                "source": span.get("source", "unknown"),
-                "url": span.get("url", ""),
-            })
-            ids.append(doc_id)
+            full_text = span.get("text", "")
+            source = span.get("source", "unknown")
+            url = span.get("url", "")
+            
+            # Chunking to prevent large payloads (max ~1500 chars/chunk)
+            chunk_size = 1500
+            for j in range(0, len(full_text), chunk_size):
+                text = full_text[j:j+chunk_size]
+                if len(text.strip()) < 50:
+                    continue  # skip tiny artifacts
+                
+                # Generate a stable hash-based ID
+                hash_input = f"{run_id}_{source}_{url}_{text}".encode("utf-8")
+                doc_id = hashlib.md5(hash_input).hexdigest()
+                
+                documents.append(text)
+                metadatas.append({
+                    "run_id": run_id,
+                    "topic": topic,
+                    "source": source,
+                    "url": url,
+                    "chunk": j,
+                })
+                ids.append(doc_id)
         
         if documents:
-            collection.add(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids,
-            )
-            print(f"[RAG] Indexed {len(documents)} grounding spans for run {run_id}")
+            # Batch upserts to stay under payload limits (100 docs/req)
+            batch_size = 100
+            for i in range(0, len(documents), batch_size):
+                collection.upsert(
+                    documents=documents[i:i+batch_size],
+                    metadatas=metadatas[i:i+batch_size],
+                    ids=ids[i:i+batch_size],
+                )
+            print(f"[RAG] Indexed {len(documents)} grounding spans in chunks for run {run_id}")
     except Exception as e:
         print(f"[RAG] Warning: Failed to index grounding spans: {e}")
 

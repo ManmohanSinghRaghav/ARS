@@ -320,7 +320,8 @@ class TestFirebaseIntegration:
         mock_collection.where.return_value.stream.return_value = mock_query_result
         
         db = mock_firestore()
-        query = db.collection("runs").where("user_id", "==", "user1")
+        from google.cloud.firestore import FieldFilter
+        query = db.collection("runs").where(filter=FieldFilter("user_id", "==", "user1"))
         results = list(query.stream())
         
         assert len(results) == 2

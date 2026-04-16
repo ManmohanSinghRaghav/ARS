@@ -261,7 +261,7 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         print(f"[CrewAI] Warning: Failed to index grounding spans: {e}")
 
     # Cleanup DB: Free vector storage after run is done to avoid bloating Chroma
-    clear_run_spans(run_id)
+    # clear_run_spans(run_id)
 
     return {
         "final_paper": str(final_paper),

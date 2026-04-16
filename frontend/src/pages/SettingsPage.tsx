@@ -16,7 +16,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
 
   // Form state
-  const [llmBackend, setLlmBackend] = useState('ollama');
+  const [llmBackend, setLlmBackend] = useState('gemini');
   const [mlxModel, setMlxModel] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('');
@@ -83,8 +83,9 @@ export default function SettingsPage() {
             onChange={(e) => setLlmBackend(e.target.value)}
             className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc]"
           >
-            <option value="ollama">Ollama</option>
-            <option value="mlx">MLX (macOS only)</option>
+            <option value="gemini">Gemini / Groq (Configured via .env)</option>
+            <option value="ollama" disabled>Ollama (Currently Unsupported)</option>
+            <option value="mlx" disabled>MLX (Currently Unsupported)</option>
           </select>
         </div>
 

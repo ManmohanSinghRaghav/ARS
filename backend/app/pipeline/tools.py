@@ -9,8 +9,8 @@ from crewai.tools import tool
 from typing import List
 
 from app.config import get_settings
-from app.pipeline.runtime_context import get_tavily_api_key
-from app.pipeline.rag import retrieve_grounding_spans
+from app.pipeline.runtime_context import get_tavily_api_key, get_run_id
+from app.pipeline.rag import retrieve_grounding_spans, index_grounding_spans
 from app.pipeline.llm_factory import get_tier_llm
 
 # Optional Redis Cache
@@ -68,19 +68,28 @@ def _summarize_batch(existing_summary: str | None, docs: List[str], topic: str) 
     return llm.call("\n".join(prompt_parts)).strip()
 
 
-# Tool 1: Literature Search (Arxiv & Tavily)
+# Tool 1: Literature Search (Arxiv + Tavily + DuckDuckGo)
 @tool("LiteratureSearchTool")
 def search_literature(topic: str) -> str:
     """
-    Search ArXiv and Tavily Web Search for scientific papers and articles on a specific topic.
+    Search ArXiv plus web sources (Tavily + DuckDuckGo) for scientific papers and articles on a specific topic.
     Always input a precise phrase representing the core topic of your research.
     """
     
     # Check cache
-    cache_key = f"search_cache:{hashlib.md5(topic.encode('utf-8')).hexdigest()}"
+    cache_key = f"search_cache_v2:{hashlib.md5(topic.encode('utf-8')).hexdigest()}"
     cached_val = _get_cache(cache_key)
+    run_id = get_run_id()
+
     if cached_val:
-        return cached_val.decode('utf-8') if isinstance(cached_val, bytes) else cached_val
+        try:
+            cached_data = json.loads(cached_val.decode('utf-8') if isinstance(cached_val, bytes) else cached_val)
+            spans_to_index = cached_data.get("spans", [])
+            if run_id and spans_to_index:
+                index_grounding_spans(run_id, topic, spans_to_index)
+            return cached_data.get("summary", "No summary found.")
+        except Exception:
+            pass # fallback to fetching
 
     docs: List[str] = []
     
@@ -95,7 +104,7 @@ def search_literature(topic: str) -> str:
     except Exception as e:
         docs.append(f"[ArXiv Error] {e}")
 
-    # Attempt Tavily Web Search
+    # Attempt Tavily Web Search (if configured)
     tavily_key = get_tavily_api_key().strip() or os.getenv("TAVILY_API_KEY", "")
     if tavily_key:
         try:
@@ -111,19 +120,55 @@ def search_literature(topic: str) -> str:
                     docs.append(f"[Web: {r.get('url', 'N/A')}]\n{_truncate_doc(content, max_chars=1800)}")
         except Exception as e:
             docs.append(f"[Tavily Error] {e}")
-    else:
-        docs.append("[Web search skipped: TAVILY_API_KEY missing]")
+
+    # Attempt DuckDuckGo Web Search
+    try:
+        from langchain_community.tools.ddg_search import DuckDuckGoSearchRun
+
+        ddg = DuckDuckGoSearchRun()
+        ddg_results = ddg.run(topic)
+        if isinstance(ddg_results, str) and ddg_results.strip():
+            docs.append(f"[DuckDuckGo Web Search]\n{_truncate_doc(ddg_results, max_chars=1800)}")
+    except Exception as e:
+        docs.append(f"[DuckDuckGo Error] {e}")
 
     if not docs:
         result_str = "No external sources generated. Rely on internal model knowledge."
     else:
+        # Before summarizing, index all found docs directly into RAG
+        # This way full verbatim content is preserved in Chroma for RetrieveGroundingSpansTool
+        spans_to_index = []
+        for i, d in enumerate(docs):
+            spans_to_index.append({
+                "text": d,
+                "source": "LiteratureSearchTool_AutoIndex",
+                "url": ""
+            })
+        
+        run_id = get_run_id()
+        if run_id and spans_to_index:
+            try:
+                index_grounding_spans(run_id, topic, spans_to_index)
+            except Exception as e:
+                print(f"[RAG] Warning: Auto-index failed: {e}")
+
         summary = None
         for i in range(0, len(docs), 2):
             batch = docs[i:i + 2]
             summary = _summarize_batch(summary, batch, topic)
+            
         result_str = summary or "No external sources generated. Rely on internal model knowledge."
         result_str = _truncate_doc(result_str, max_chars=3200)
-        _set_cache(cache_key, result_str)
+        
+        # Cache both the original docs (spans_to_index) and the summary
+        try:
+            cache_payload = json.dumps({
+                "spans": spans_to_index,
+                "summary": result_str
+            })
+            _set_cache(cache_key, cache_payload)
+        except Exception as e:
+            print(f"[RAG] Warning: Failed to cache spans: {e}")
 
     return result_str
 
@@ -193,8 +238,9 @@ def retrieve_grounding_spans_tool(claim: str) -> str:
     Search the internally indexed research spans (ChromaDB) to find evidence matching a specific claim.
     Use this to pull verbatim text from the literature researcher's extracted spans.
     """
+    run_id = get_run_id()
     try:
-        spans = retrieve_grounding_spans(query=claim, top_k=5)
+        spans = retrieve_grounding_spans(query=claim, run_id=run_id, top_k=5)
         if not spans:
             return "No relevant grounding spans found."
         

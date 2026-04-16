@@ -105,7 +105,8 @@ def list_runs(
     """List the current user's past runs."""
     query = db.collection("runs")
     if current_user.role != "admin":
-        query = query.where("user_id", "==", current_user.id)
+        from google.cloud.firestore import FieldFilter
+        query = query.where(filter=FieldFilter("user_id", "==", current_user.id))
     
     # ── Temp fix: Remove order_by to avoid Firestore index requirement ──
     # query = query.order_by("created_at", direction="DESCENDING").offset(skip).limit(limit)

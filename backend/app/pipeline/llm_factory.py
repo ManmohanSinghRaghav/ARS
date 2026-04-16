@@ -14,8 +14,15 @@ from crewai import LLM
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 class RetryingLLM(LLM):
-    """CrewAI LLM wrapper that adds exponential backoff for API limits (e.g. 429)."""
+    """CrewAI LLM wrapper that adds exponential backoff for API limits (e.g. 429) & optional context-limit fallback."""
     
+    def __init__(self, fallback_model: Optional[str] = None, fallback_key: Optional[str] = None, **kwargs):
+        # Prevent pydantic from complaining about custom kwargs
+        super().__init__(**kwargs)
+        # Store securely inside private attributes if pydantic prevents dynamically adding fields
+        object.__setattr__(self, "_fallback_model", fallback_model)
+        object.__setattr__(self, "_fallback_key", fallback_key)
+
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(5),
@@ -23,7 +30,26 @@ class RetryingLLM(LLM):
         reraise=True
     )
     def call(self, *args, **kwargs):
-        return super().call(*args, **kwargs)
+        try:
+            return super().call(*args, **kwargs)
+        except Exception as e:
+            err_str = str(e).lower()
+            # Catch token context limits on Groq or RateLimits that persist
+            if getattr(self, "_fallback_model", None) and ("context" in err_str or "token" in err_str or "too large" in err_str or "413" in err_str or "400" in err_str):
+                print(f"[LLM] Token limit or parsing issue hit on {self.model}. Yielding fallback to {self._fallback_model}...")
+                orig_model = self.model
+                orig_key = getattr(self, "api_key", None)
+                try:
+                    self.model = self._fallback_model
+                    if getattr(self, "_fallback_key", None):
+                        self.api_key = self._fallback_key
+                    return super().call(*args, **kwargs)
+                finally:
+                    # Restore
+                    self.model = orig_model
+                    if orig_key:
+                        self.api_key = orig_key
+            raise e
 
 def _get_effective_config(user_settings: Optional[dict] = None) -> dict:
     from app.config import get_settings
@@ -66,12 +92,24 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
     
     if tier == "extraction":
         if groq_key:
-            return RetryingLLM(model="groq/llama-3.1-8b-instant", temperature=0.1, api_key=groq_key)
+            return RetryingLLM(
+                model="groq/llama-3.1-8b-instant", 
+                temperature=0.1, 
+                api_key=groq_key,
+                fallback_model="gemini-3.1-flash-lite",
+                fallback_key=gemini_key
+            )
         return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.1, api_key=gemini_key)
         
     if tier == "critic":
         if groq_key:
-            return RetryingLLM(model="groq/llama-3.3-70b-versatile", temperature=0.2, api_key=groq_key)
+            return RetryingLLM(
+                model="groq/llama-3.3-70b-versatile", 
+                temperature=0.2, 
+                api_key=groq_key,
+                fallback_model="gemini-3.1-flash-lite",
+                fallback_key=gemini_key
+            )
         return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.2, api_key=gemini_key)
 
     # Backward-compatible default for any unexpected tier.

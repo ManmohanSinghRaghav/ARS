@@ -3,14 +3,16 @@ Pipeline runner — orchestrates a full ARS research run and persists results to
 Runs the pipeline in a background thread so the API responds immediately.
 """
 
+import os
 import threading
 import traceback
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Optional
 
 from app.pipeline.crew import run_crew_pipeline
 from app.pipeline.progress import add_step, clear as clear_progress
-from app.pipeline.runtime_context import set_tavily_api_key
+from app.pipeline.runtime_context import set_tavily_api_key, set_run_id
 from app.config import get_settings
 
 def run_pipeline(topic: str, user_id: str, db,
@@ -65,66 +67,87 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
         return
     run_ref = db_client.collection("runs").document(run_id)
 
-    try:
-        set_tavily_api_key(tavily_api_key)
-        add_step(run_id, 0, 10, "Initializing CrewAI pipeline", "running")
+    telemetry_enabled = bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) or (
+        os.getenv("TRACELOOP_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
 
-        # Kickoff Crew
-        result = run_crew_pipeline(
-            topic=topic,
-            run_id=run_id,
-            llm_config=llm_config,
-        )
+    span_cm = nullcontext()
+    if telemetry_enabled:
+        try:
+            from opentelemetry import trace
+            tracer = trace.get_tracer("ars.pipeline")
+            span_cm = tracer.start_as_current_span("ars.run")
+        except Exception:
+            span_cm = nullcontext()
 
-        backend = (llm_config or {}).get("llm_backend", default_backend or "ollama")
-        model_name = (
-            (llm_config or {}).get("mlx_model", default_mlx)
-            if backend == "mlx"
-            else (llm_config or {}).get("ollama_model", default_ollama)
-        )
-
-        # CrewAI returns the markdown paper, hypothesis overview, and execution run stats
-        paper_markdown = result.get("final_paper", "")
-        
-        # Upload paper to storage if bucket is configured
-        from app.database import get_storage_bucket
-        storage_bucket = get_storage_bucket()
-        if storage_bucket and paper_markdown:
+    with span_cm as span:
+        if span is not None:
             try:
-                blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
-                blob.upload_from_string(paper_markdown, content_type="text/markdown")
-                print(f"[Pipeline] Paper uploaded to Storage: runs/{run_id}/paper.md")
-            except Exception as e:
-                print(f"[Pipeline] Warning: Failed to upload paper to storage: {e}")
-        
-        run_ref.update({
-            "status": "completed",
-            "hypothesis": result.get("hypothesis", ""),
-            "generated_code": "", # Removed explicitly to just rely on execution output logs
-            "execution_output": result.get("execution_output", ""),
-            "paper_markdown": paper_markdown,
-            "summary_json": {
-                "topic": topic,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "llm_backend": backend,
-                "model": model_name,
-                **result.get("summary_data", {})
-            },
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+                span.set_attribute("ars.run_id", run_id)
+            except Exception:
+                pass
 
-    except Exception as e:
-        run_ref.update({
-            "status": "failed",
-            "error_message": f"{type(e).__name__}: {e}",
-        })
-        add_step(run_id, 0, 10, f"Pipeline failed: {e}", "error")
-        print(f"[Pipeline] FAILED: {e}")
-        traceback.print_exc()
+        try:
+            set_tavily_api_key(tavily_api_key)
+            set_run_id(run_id)
+            add_step(run_id, 0, 10, "Initializing CrewAI pipeline", "running")
 
-    finally:
-        def _cleanup():
-            import time
-            time.sleep(30)
-            clear_progress(run_id)
-        threading.Thread(target=_cleanup, daemon=True).start()
+            # Kickoff Crew
+            result = run_crew_pipeline(
+                topic=topic,
+                run_id=run_id,
+                llm_config=llm_config,
+            )
+
+            backend = (llm_config or {}).get("llm_backend", default_backend or "ollama")
+            model_name = (
+                (llm_config or {}).get("mlx_model", default_mlx)
+                if backend == "mlx"
+                else (llm_config or {}).get("ollama_model", default_ollama)
+            )
+
+            # CrewAI returns the markdown paper, hypothesis overview, and execution run stats
+            paper_markdown = result.get("final_paper", "")
+
+            # Upload paper to storage if bucket is configured
+            from app.database import get_storage_bucket
+            storage_bucket = get_storage_bucket()
+            if storage_bucket and paper_markdown:
+                try:
+                    blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
+                    blob.upload_from_string(paper_markdown, content_type="text/markdown")
+                    print(f"[Pipeline] Paper uploaded to Storage: runs/{run_id}/paper.md")
+                except Exception as e:
+                    print(f"[Pipeline] Warning: Failed to upload paper to storage: {e}")
+
+            run_ref.update({
+                "status": "completed",
+                "hypothesis": result.get("hypothesis", ""),
+                "generated_code": "", # Removed explicitly to just rely on execution output logs
+                "execution_output": result.get("execution_output", ""),
+                "paper_markdown": paper_markdown,
+                "summary_json": {
+                    "topic": topic,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "llm_backend": backend,
+                    "model": model_name,
+                    **result.get("summary_data", {})
+                },
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        except Exception as e:
+            run_ref.update({
+                "status": "failed",
+                "error_message": f"{type(e).__name__}: {e}",
+            })
+            add_step(run_id, 0, 10, f"Pipeline failed: {e}", "error")
+            print(f"[Pipeline] FAILED: {e}")
+            traceback.print_exc()
+
+        finally:
+            def _cleanup():
+                import time
+                time.sleep(30)
+                clear_progress(run_id)
+            threading.Thread(target=_cleanup, daemon=True).start()
