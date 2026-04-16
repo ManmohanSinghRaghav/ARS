@@ -40,14 +40,18 @@ body {
 }
 
 /* Markdown prose styles */
-.prose h1 { @apply text-2xl font-bold mt-6 mb-3; }
-.prose h2 { @apply text-xl font-semibold mt-5 mb-2; }
-.prose h3 { @apply text-lg font-semibold mt-4 mb-2; }
-.prose p { @apply mb-3 leading-relaxed; }
-.prose ul { @apply list-disc pl-6 mb-3; }
-.prose ol { @apply list-decimal pl-6 mb-3; }
-.prose li { @apply mb-1; }
-.prose code { @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono; }
+.prose h1 { @apply text-2xl font-bold mt-6 mb-3 text-[#f6f6fc]; }
+.prose h2 { @apply text-xl font-semibold mt-5 mb-2 text-[#f6f6fc]; }
+.prose h3 { @apply text-lg font-semibold mt-4 mb-2 text-[#f6f6fc]; }
+.prose p { @apply mb-3 leading-relaxed text-[#aaabb0]; }
+.prose ul { @apply list-disc pl-6 mb-3 text-[#aaabb0]; }
+.prose ol { @apply list-decimal pl-6 mb-3 text-[#aaabb0]; }
+.prose li { @apply mb-1 text-[#aaabb0]; }
+.prose code { @apply bg-slate-700 px-1.5 py-0.5 rounded text-sm font-mono text-[#a1faff]; }
+.prose a { @apply text-[#a1faff] hover:text-[#00f4fe] transition-colors; }
+.prose strong { @apply text-[#f6f6fc] font-bold; }
+.prose em { @apply text-[#e0e0e8] italic; }
+.prose blockquote { @apply border-l-4 border-[#a1faff]/30 pl-4 text-[#aaabb0] italic; }
 .prose pre { @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto mb-4; }
 .prose pre code { @apply bg-transparent p-0; }
 .prose blockquote { @apply border-l-4 border-primary-300 pl-4 italic text-gray-600 mb-3; }

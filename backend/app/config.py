@@ -37,11 +37,16 @@ class Settings(BaseSettings):
     # ── Firebase Storage ──
     FIREBASE_STORAGE_BUCKET: str = ""
 
+    # ── Cache (Redis) ──
+    REDIS_URL: str = ""
+
     # ── Vector Store & RAG (ChromaDB) ──
     CHROMA_ENABLED: bool = False
-    CHROMA_HOST: str = ""
-    CHROMA_PORT: int = 8000
+    CHROMA_HOST: str = "https://api.trychroma.com"
+    CHROMA_PORT: int = 443
     CHROMA_API_KEY: str = ""
+    CHROMA_TENANT: str = "d5a06c2e-49d9-4efa-8357-69a2110af4ca"
+    CHROMA_DATABASE: str = "ARS"
 
     # ── Outputs ──
     OUTPUTS_DIR: str = str(BACKEND_DIR / "outputs")

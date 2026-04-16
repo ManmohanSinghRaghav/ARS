@@ -39,20 +39,20 @@ const STEP_LABELS: Record<number, string> = {
 function StepIcon({ status }: { status: string }) {
   if (status === 'done') {
     return (
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 text-green-600 text-sm font-bold">
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500/20 text-green-300 text-sm font-bold">
         ✓
       </span>
     );
   }
   if (status === 'running') {
     return (
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-600">
-        <span className="block h-3 w-3 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#a1faff]/20 text-[#a1faff]">
+        <span className="block h-3 w-3 animate-spin rounded-full border-2 border-[#a1faff] border-t-transparent" />
       </span>
     );
   }
   return (
-    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 text-gray-400 text-xs">
+    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-600/50 text-slate-400 text-xs">
       ●
     </span>
   );
@@ -149,33 +149,33 @@ export default function DashboardPage() {
   const currentStep = steps.length > 0 ? Math.max(...steps.map((s) => s.step)) : 0;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="max-w-4xl mx-auto px-4 py-8 text-[#f6f6fc]">
       {/* New Run Section */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8">
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">Start New Research</h1>
-        <p className="text-gray-500 mb-6">
+      <div className="bg-slate-800/40 rounded-2xl shadow-lg border border-[#a1faff]/20 p-8 mb-8">
+        <h1 className="text-2xl font-bold text-[#f6f6fc] mb-2">Start New Research</h1>
+        <p className="text-[#aaabb0] mb-6">
           Enter a research topic, constraints, and vibe. The intent architect will verify claims using a multi-agent swarm.
         </p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Research Topic</label>
+            <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Research Topic</label>
             <input
               type="text"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="e.g., Explain sparse attention mechanisms in LLMs"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all"
+              className="w-full px-4 py-3 border border-[#a1faff]/30 rounded-lg bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0] focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none transition-all"
               disabled={running}
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Agent Vibe</label>
+              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Agent Vibe</label>
               <select
                 value={vibe}
                 onChange={(e) => setVibe(e.target.value)}
                 disabled={running}
-                className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
+                className="w-full px-4 py-3 bg-slate-700/50 text-[#f6f6fc] border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] outline-none"
               >
                 <option value="Deep Academic">Deep Academic</option>
                 <option value="Fast-Paced Prototype">Fast-Paced Prototype</option>
@@ -183,13 +183,13 @@ export default function DashboardPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Input Commands / Constraints</label>
+              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Input Commands / Constraints</label>
               <input
                 type="text"
                 value={commands}
                 onChange={(e) => setCommands(e.target.value)}
                 placeholder="e.g., Focus only on causal modeling limits"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
+                className="w-full px-4 py-3 border border-[#a1faff]/30 rounded-lg bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0] focus:ring-2 focus:ring-[#a1faff] outline-none"
                 disabled={running}
               />
             </div>
@@ -197,7 +197,7 @@ export default function DashboardPage() {
           <button
             type="submit"
             disabled={running}
-            className="mt-2 w-full py-3 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors"
+            className="mt-2 w-full py-3 bg-[#a1faff]/20 text-[#a1faff] rounded-lg font-medium hover:bg-[#a1faff]/30 disabled:opacity-50 transition-colors"
           >
             {running ? 'Swarm Initializing...' : 'Initialize Mission'}
           </button>
@@ -206,16 +206,16 @@ export default function DashboardPage() {
 
       {/* Pipeline Progress */}
       {running && activeRunId && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8">
-          <h2 className="text-lg font-semibold text-gray-800 mb-1">Pipeline Progress</h2>
-          <p className="text-sm text-gray-400 mb-6">
+        <div className="bg-slate-800/40 rounded-2xl shadow-lg border border-[#a1faff]/20 p-8 mb-8">
+          <h2 className="text-lg font-semibold text-[#f6f6fc] mb-1">Pipeline Progress</h2>
+          <p className="text-sm text-[#aaabb0] mb-6">
             Run #{activeRunId} — This typically takes 5–30 minutes
           </p>
 
           {/* Progress bar */}
-          <div className="w-full bg-gray-100 rounded-full h-2 mb-6">
+          <div className="w-full bg-slate-700/50 rounded-full h-2 mb-6 border border-[#a1faff]/20">
             <div
-              className="bg-primary-500 h-2 rounded-full transition-all duration-500"
+              className="bg-gradient-to-r from-[#a1faff] to-[#00f4fe] h-2 rounded-full transition-all duration-500"
               style={{ width: `${(currentStep / 10) * 100}%` }}
             />
           </div>
@@ -237,11 +237,11 @@ export default function DashboardPage() {
                   } ${isActive ? 'font-medium' : ''}`}
                 >
                   <StepIcon status={status} />
-                  <span className="text-gray-700 text-sm">
+                  <span className="text-[#f6f6fc] text-sm">
                     {stepNum}. {label}
                   </span>
                   {detail && (
-                    <span className="text-xs text-gray-400 ml-auto">{detail}</span>
+                    <span className="text-xs text-[#aaabb0] ml-auto">{detail}</span>
                   )}
                 </li>
               );
@@ -253,17 +253,17 @@ export default function DashboardPage() {
       {/* Recent Runs */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">Recent Runs</h2>
+          <h2 className="text-lg font-semibold text-[#f6f6fc]">Recent Runs</h2>
           {recentRuns.length > 0 && (
-            <a href="/history" className="text-sm text-primary-600 hover:underline">
+            <a href="/history" className="text-sm text-[#a1faff] hover:text-[#00f4fe] transition-colors">
               View all
             </a>
           )}
         </div>
         {loadingRuns ? (
-          <div className="text-center py-8 text-gray-400">Loading...</div>
+          <div className="text-center py-8 text-[#aaabb0]">Loading...</div>
         ) : recentRuns.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">
+          <div className="text-center py-12 text-[#aaabb0]">
             <p className="text-lg mb-1">No research runs yet</p>
             <p className="text-sm">Start your first run above!</p>
           </div>

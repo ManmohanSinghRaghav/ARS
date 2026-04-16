@@ -72,16 +72,16 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">LLM Settings</h1>
+      <h1 className="text-2xl font-bold text-[#f6f6fc] mb-6">LLM Settings</h1>
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-5">
+      <form onSubmit={handleSubmit} className="bg-slate-800/40 rounded-2xl shadow-lg border border-[#a1faff]/20 p-6 space-y-5">
         {/* LLM Backend */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">LLM Backend</label>
+          <label className="block text-sm font-medium text-[#f6f6fc] mb-1">LLM Backend</label>
           <select
             value={llmBackend}
             onChange={(e) => setLlmBackend(e.target.value)}
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none bg-white"
+            className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc]"
           >
             <option value="ollama">Ollama</option>
             <option value="mlx">MLX (macOS only)</option>
@@ -92,22 +92,22 @@ export default function SettingsPage() {
         {llmBackend === 'ollama' && (
           <>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Ollama Model</label>
+              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Ollama Model</label>
               <input
                 type="text"
                 value={ollamaModel}
                 onChange={(e) => setOllamaModel(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0]"
                 placeholder="e.g., qwen2.5:3b"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Ollama URL</label>
+              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Ollama URL</label>
               <input
                 type="text"
                 value={ollamaUrl}
                 onChange={(e) => setOllamaUrl(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0]"
                 placeholder="http://localhost:11434"
               />
             </div>
@@ -116,12 +116,12 @@ export default function SettingsPage() {
 
         {llmBackend === 'mlx' && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">MLX Model</label>
+            <label className="block text-sm font-medium text-[#f6f6fc] mb-1">MLX Model</label>
             <input
               type="text"
               value={mlxModel}
               onChange={(e) => setMlxModel(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+              className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0]"
               placeholder="e.g., mlx-community/Qwen2.5-3B-Instruct-bf16"
             />
           </div>
@@ -129,26 +129,26 @@ export default function SettingsPage() {
 
         {/* Tavily API Key */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-[#f6f6fc] mb-1">
             Tavily API Key
             {settings?.tavily_api_key_set && (
-              <span className="ml-2 text-green-600 text-xs font-normal">(configured)</span>
+              <span className="ml-2 text-green-300 text-xs font-normal">(configured)</span>
             )}
           </label>
           <input
             type="password"
             value={tavilyKey}
             onChange={(e) => setTavilyKey(e.target.value)}
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+            className="w-full px-4 py-2.5 border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0]"
             placeholder={settings?.tavily_api_key_set ? '••••••••  (leave blank to keep current)' : 'Enter Tavily API key'}
           />
-          <p className="text-xs text-gray-400 mt-1">Required for web search. Get a key at tavily.com</p>
+          <p className="text-xs text-[#aaabb0] mt-1">Required for web search. Get a key at tavily.com</p>
         </div>
 
         <button
           type="submit"
           disabled={saving}
-          className="w-full py-2.5 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors"
+          className="w-full py-2.5 bg-[#a1faff]/20 text-[#a1faff] rounded-lg font-medium hover:bg-[#a1faff]/30 disabled:opacity-50 transition-colors"
         >
           {saving ? 'Saving...' : 'Save Settings'}
         </button>

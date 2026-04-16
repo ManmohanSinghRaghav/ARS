@@ -62,17 +62,17 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
     groq_key = (cfg.get("groq_api_key") or "").strip()
 
     if tier == "reasoning":
-        return RetryingLLM(model="gemini-1.5-pro", temperature=0.7, api_key=gemini_key)
+        return RetryingLLM(model="gemini-3.1-flash-lite", temperature=0.7, api_key=gemini_key)
     
     if tier == "extraction":
         if groq_key:
-            return RetryingLLM(model="groq/llama3-8b-8192", temperature=0.1, api_key=groq_key)
-        return RetryingLLM(model="gemini-1.5-flash", temperature=0.1, api_key=gemini_key)
+            return RetryingLLM(model="groq/llama-3.1-8b-instant", temperature=0.1, api_key=groq_key)
+        return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.1, api_key=gemini_key)
         
     if tier == "critic":
         if groq_key:
-            return RetryingLLM(model="groq/llama3-8b-8192", temperature=0.2, api_key=groq_key)
-        return RetryingLLM(model="gemini-1.5-pro", temperature=0.2, api_key=gemini_key)
+            return RetryingLLM(model="groq/llama-3.3-70b-versatile", temperature=0.2, api_key=groq_key)
+        return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.2, api_key=gemini_key)
 
     # Backward-compatible default for any unexpected tier.
-    return RetryingLLM(model="gemini-1.5-flash", temperature=0.0, api_key=gemini_key)
+    return RetryingLLM(model="gemini-3.1-flash-lite", temperature=0.0, api_key=gemini_key)

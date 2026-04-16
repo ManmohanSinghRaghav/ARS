@@ -5,6 +5,8 @@ Indexes grounding spans and enables semantic retrieval during verification phase
 
 import os
 from typing import List, Optional
+from urllib.parse import urlparse
+
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
@@ -18,21 +20,34 @@ _chroma_collection = None
 def get_chroma_client():
     """Initialize or return cached Chroma client."""
     global _chroma_client
-    
+
     if _chroma_client is not None:
         return _chroma_client
-    
+
     settings = get_settings()
     if not settings.CHROMA_ENABLED:
         return None
-    
+
     try:
         if settings.CHROMA_HOST:
-            # Use remote Chroma server
+            # Use remote Chroma server (Chroma Cloud / remote HTTP)
+            parsed = urlparse(settings.CHROMA_HOST)
+            host = parsed.netloc or parsed.path or settings.CHROMA_HOST
+            ssl = (parsed.scheme == "https") or (settings.CHROMA_PORT == 443)
+
+            headers = (
+                {"Authorization": f"Bearer {settings.CHROMA_API_KEY}"}
+                if settings.CHROMA_API_KEY
+                else {}
+            )
+
             _chroma_client = chromadb.HttpClient(
-                host=settings.CHROMA_HOST,
+                host=host,
                 port=settings.CHROMA_PORT,
-                headers={"Authorization": f"Bearer {settings.CHROMA_API_KEY}"} if settings.CHROMA_API_KEY else {}
+                ssl=ssl,
+                headers=headers,
+                tenant=settings.CHROMA_TENANT,
+                database=settings.CHROMA_DATABASE,
             )
         else:
             # Use ephemeral/in-memory client for local development
@@ -40,10 +55,10 @@ def get_chroma_client():
                 chroma_db_impl="duckdb",
                 persist_directory=os.path.join(os.path.expanduser("~"), ".chroma"),
                 anonymized_telemetry=False,
-                allow_reset=True
+                allow_reset=True,
             )
             _chroma_client = chromadb.Client(chroma_settings)
-        
+
         print("[RAG] Chroma client initialized successfully")
         return _chroma_client
     except Exception as e:

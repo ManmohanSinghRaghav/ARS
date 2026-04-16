@@ -35,3 +35,4 @@ dist/
 .vscode/
 .idea/
 service-account.json
+backend/.litellm_cache/

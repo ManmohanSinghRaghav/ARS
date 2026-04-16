@@ -104,10 +104,10 @@ export default function RunDetailPage() {
   ];
 
   const statusColors: Record<string, string> = {
-    completed: 'bg-green-100 text-green-800',
-    running: 'bg-blue-100 text-blue-800',
-    failed: 'bg-red-100 text-red-800',
-    pending: 'bg-yellow-100 text-yellow-800',
+    completed: 'bg-green-500/20 text-green-300',
+    running: 'bg-blue-500/20 text-blue-300',
+    failed: 'bg-red-500/20 text-red-300',
+    pending: 'bg-yellow-500/20 text-yellow-300',
   };
 
   return (
@@ -115,9 +115,9 @@ export default function RunDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800 mb-2">{run.topic}</h1>
-          <div className="flex items-center gap-3 text-sm text-gray-500">
-            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[run.status] || 'bg-gray-100 text-gray-600'}`}>
+          <h1 className="text-2xl font-bold text-[#f6f6fc] mb-2">{run.topic}</h1>
+          <div className="flex items-center gap-3 text-sm text-[#aaabb0]">
+            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[run.status] || 'bg-gray-500/20 text-gray-300'}`}>
               {run.status}
             </span>
             <span>{new Date(run.created_at).toLocaleString()}</span>
@@ -131,13 +131,13 @@ export default function RunDetailPage() {
             <>
               <button
                 onClick={handleDownload}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
+                className="px-4 py-2 bg-[#a1faff]/20 text-[#a1faff] rounded-lg text-sm font-medium hover:bg-[#a1faff]/30 transition-colors"
               >
                 Download Paper
               </button>
               <button
                 onClick={handleDownloadPdf}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
+                className="px-4 py-2 bg-[#a1faff]/20 text-[#a1faff] rounded-lg text-sm font-medium hover:bg-[#a1faff]/30 transition-colors"
               >
                 Download PDF
               </button>
@@ -145,7 +145,7 @@ export default function RunDetailPage() {
           )}
           <button
             onClick={handleDelete}
-            className="px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+            className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg text-sm font-medium hover:bg-red-500/30 transition-colors"
           >
             Delete
           </button>
@@ -154,14 +154,14 @@ export default function RunDetailPage() {
 
       {/* Error message */}
       {run.error_message && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <h3 className="text-red-800 font-medium mb-1">Error</h3>
-          <pre className="text-red-700 text-sm whitespace-pre-wrap font-mono">{run.error_message}</pre>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6">
+          <h3 className="text-red-300 font-medium mb-1">Error</h3>
+          <pre className="text-red-200 text-sm whitespace-pre-wrap font-mono">{run.error_message}</pre>
         </div>
       )}
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
+      <div className="border-b border-[#a1faff]/20 mb-6">
         <div className="flex space-x-0">
           {tabs.map((tab) => (
             <button
@@ -169,8 +169,8 @@ export default function RunDetailPage() {
               onClick={() => setActiveTab(tab.key)}
               className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === tab.key
-                  ? 'border-primary-600 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  ? 'border-[#a1faff] text-[#a1faff]'
+                  : 'border-transparent text-[#aaabb0] hover:text-[#f6f6fc] hover:border-[#a1faff]/30'
               }`}
             >
               {tab.label}
@@ -180,22 +180,22 @@ export default function RunDetailPage() {
       </div>
 
       {/* Tab content */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div className="bg-slate-800/40 rounded-xl shadow-lg border border-[#a1faff]/20 p-6">
         {activeTab === 'paper' && <PaperViewer markdown={run.paper_markdown} />}
 
         {activeTab === 'hypothesis' && (
           run.hypothesis
             ? <PaperViewer markdown={run.hypothesis} />
-            : <div className="text-gray-400 italic">No hypothesis generated.</div>
+            : <div className="text-[#aaabb0] italic">No hypothesis generated.</div>
         )}
 
         {activeTab === 'code' && <CodeBlock code={run.generated_code} />}
 
         {activeTab === 'output' && (
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-800">AgentTrace Execution Log</h3>
-            <p className="text-sm text-gray-500 mb-2">Internal Sandbox STDOUT/STDERR captured during the OODA "Karpathy Move" validation.</p>
-            <pre className="bg-gray-900 border border-gray-700 text-green-400 p-5 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap shadow-inner leading-relaxed">
+            <h3 className="text-lg font-semibold text-[#f6f6fc]">AgentTrace Execution Log</h3>
+            <p className="text-sm text-[#aaabb0] mb-2">Internal Sandbox STDOUT/STDERR captured during the OODA "Karpathy Move" validation.</p>
+            <pre className="bg-black/50 border border-[#a1faff]/30 text-[#a1faff] p-5 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap shadow-inner leading-relaxed">
               {run.execution_output || '[Execution Trace Empty]'}
             </pre>
           </div>

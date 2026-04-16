@@ -7,11 +7,11 @@ interface PaperViewerProps {
 
 export default function PaperViewer({ markdown }: PaperViewerProps) {
   if (!markdown) {
-    return <p className="text-gray-500 italic">No paper content available.</p>;
+    return <p className="text-[#aaabb0] italic">No paper content available.</p>;
   }
 
   return (
-    <div className="prose max-w-none">
+    <div className="prose prose-invert max-w-none">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
     </div>
   );

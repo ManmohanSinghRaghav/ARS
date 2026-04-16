@@ -7,13 +7,15 @@ import os
 import json
 import litellm
 from crewai import Agent, Task, Crew, Process
-from app.pipeline.tools import search_literature, sandbox_execute
+from app.config import get_settings
+from app.pipeline.tools import search_literature, sandbox_execute, retrieve_grounding_spans_tool
 from app.pipeline.llm_factory import get_tier_llm
 from app.pipeline.progress import add_step
-from app.pipeline.rag import index_grounding_spans
+from app.pipeline.rag import index_grounding_spans, clear_run_spans
 
 # --- Initialize Global LLM API Caching ---
-redis_url = os.environ.get("REDIS_URL")
+_settings = get_settings()
+redis_url = (_settings.REDIS_URL or "").strip() or os.environ.get("REDIS_URL")
 if redis_url:
     try:
         litellm.cache = litellm.Cache(type="redis", url=redis_url)
@@ -49,12 +51,12 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     # ==========================================
     researcher = Agent(
         role="Principal Literature Researcher",
-        goal=f"Mines structured Grounding Spans and latest papers about: {topic}",
+        goal=f"Mines concise structured Grounding Spans and latest papers about: {topic}",
         backstory=(
             "You are an expert AI literature parsing engine. "
-            "You use the extraction engine for high-volume parsing. "
-            "Extract verbatim 'Grounding Spans' from ArXiv and web content. "
-            "Identify missing knowledge edges."
+            "Use the LiteratureSearchTool to answer only with essential verbatim evidence and metadata. "
+            "Do not include the full tool output in your reasoning; instead summarize and extract exact grounding spans. "
+            "Identify missing knowledge edges while keeping the prompt size minimal."
         ),
         llm=extraction_llm,
         tools=[search_literature],
@@ -64,13 +66,14 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
 
     lead_scientist = Agent(
         role="Lead Research Scientist",
-        goal="Synthesize structured observations into a novel, falsifiable scientific hypothesis.",
+        goal="Synthesize structured observations into a novel, falsifiable scientific hypothesis using RetrieveGroundingSpansTool.",
         backstory=(
             f"You are a visionary intent architect operating in a '{target_vibe}' vibe. "
-            "You leverage System 2 thinking to formulate breakthrough testable claims. "
+            "You MUST use the RetrieveGroundingSpansTool to search extracted literature to formulate breakthrough testable claims. "
             "Hypotheses must explicitly define variable relationships measurable via code."
         ),
         llm=reasoning_llm,
+        tools=[retrieve_grounding_spans_tool],
         allow_delegation=False,
         verbose=True,
     )
@@ -82,21 +85,24 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
             "You are a senior simulation engineer. "
             "You MUST use your SandboxTool to execute the code. "
             "If code fails, you perform the 'Karpathy Move': ingest the stack trace and self-correct once! "
+            "You can also use RetrieveGroundingSpansTool if you need algorithm details from literature."
         ),
         llm=reasoning_llm,
-        tools=[sandbox_execute],
+        tools=[sandbox_execute, retrieve_grounding_spans_tool],
         allow_delegation=False,
         verbose=True,
     )
 
     verifier = Agent(
         role="Adversarial RefLens Critic",
-        goal="Check hallucinated citations and logically dissect experimental claims.",
+        goal="Check hallucinated citations and logically dissect experimental claims using specific tool retrieval.",
         backstory=(
             "You act as the 'Verifier'. You decompose synthesis into 'Atomic Claims' and perform Multi-Hop Tracing. "
+            "You MUST use the RetrieveGroundingSpansTool to find evidence for claims from the ChromaDB index. "
             "Any claim lacking strict verbatim evidence is marked 'Speculative'."
         ),
         llm=critic_llm,
+        tools=[retrieve_grounding_spans_tool],
         allow_delegation=False,
         verbose=True,
     )
@@ -106,9 +112,11 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         goal=f"Draft a formal, publication-ready research paper with the requested '{target_vibe}' tone.",
         backstory=(
             "You weave verified claims and experimental results into beautiful, rigorous Markdown papers with LaTeX formulas. "
+            "You MUST use RetrieveGroundingSpansTool to pull verbatim context from literature. "
             "Outputs must follow the Cognitive Surface format including Grounding Spans."
         ),
         llm=reasoning_llm,
+        tools=[retrieve_grounding_spans_tool],
         allow_delegation=False,
         verbose=True,
     )
@@ -118,22 +126,22 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     # ==========================================
     
     task_research = Task(
-        description=f"Parse the research topic: '{topic}'. Keep these sub-commands in mind: {user_commands}. Use tools to mine ArXiv/Web. Extract verbatim 'Grounding Spans' and metadata.",
+        description=f"Parse the research topic: '{topic}'. Keep these sub-commands in mind: {user_commands}. Use tools to mine ArXiv/Web, but keep all citations concise and only extract exact grounding spans and metadata.",
         expected_output="A structured output mapping 3 major gaps and verbatim grounding spans extracted from literature.",
         agent=researcher,
         async_execution=False
     )
 
     task_hypothesis = Task(
-        description=f"Review the researcher's extracted spans and any user constraints: {user_commands}. Formulate a SINGLE falsifiable hypothesis using System 2 reasoning.",
+        description=f"Use RetrieveGroundingSpansTool to query the researcher's extracted spans with user constraints: {user_commands}. Formulate a SINGLE falsifiable hypothesis using System 2 reasoning.",
         expected_output="A mathematically or computationally testable hypothesis statement, justifying novelty.",
         agent=lead_scientist,
-        context=[task_research],
+        context=[],  # Refactored for RAG Tool
         async_execution=False
     )
 
     task_experiment = Task(
-        description="Write an E2B/Modal sandbox Python script testing the hypothesis. Execute it. If it fails, read STDERR, do the 'Karpathy Move' and fix it.",
+        description="Write an E2B/Modal sandbox Python script testing the hypothesis. Use RetrieveGroundingSpansTool if you need algorithm details. Execute it. If it fails, read STDERR, do the 'Karpathy Move' and fix it.",
         expected_output="The final working Python code, along with stdout metrics proving/disproving the claim.",
         agent=ml_engineer,
         context=[task_hypothesis],
@@ -141,22 +149,37 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     )
 
     task_verify = Task(
-        description="Verify the experiment outputs and hypothesis claims against the researcher's grounding spans. Output MUST be a STRICT JSON array of objects with keys: {'claim': string, 'evidence_span': string, 'status': 'Verified' | 'Speculative'}.",
+        description="Verify the experiment outputs and hypothesis claims using RetrieveGroundingSpansTool. Output MUST be a STRICT JSON array of objects with keys: {'claim': string, 'evidence_span': string, 'status': 'Verified' | 'Speculative'}.",
         expected_output="A JSON array of formal 'Grounding Card' objects mapping each atomic claim to verbatim quotes. If confidence < 90%, mark 'Speculative'.",
         agent=verifier,
-        context=[task_research, task_hypothesis, task_experiment],
+        context=[task_hypothesis, task_experiment],
         async_execution=False  # Gating synchronization point
     )
 
     task_writing = Task(
-        description=f"Compile all verified claims, code, and findings into a strict '{target_vibe}' Markdown Research Paper. Include LaTeX formulas (e.g., $E=mc^2$). DO NOT include 'Speculative' claims.",
+        description=f"Compile all verified claims, code, and findings into a strict '{target_vibe}' Markdown Research Paper. You MUST use RetrieveGroundingSpansTool to pull the verbatim text of the verified claims to weave into your writing. Include LaTeX formulas (e.g., $E=mc^2$). DO NOT include 'Speculative' claims.",
         expected_output="A complete, professional markdown string representing the final generated Paper.",
         agent=academic_writer,
         context=[task_verify],
         async_execution=False
     )
 
-    def task_research_cb(*args): _progress(2, "Extraction Engine Completed (Grounding Spans Mined)", "done")
+    def task_research_cb(task_output): 
+        # Attempt to index chunks
+        try:
+            raw_text = task_output.raw_content
+            # Split roughly by paragraphs or sentences
+            chunks = raw_text.split('\n\n')
+            spans = []
+            for chunk in chunks:
+                if len(chunk.strip()) > 50:
+                    spans.append({"text": chunk, "source": "task_research_output"})
+            if spans:
+                index_grounding_spans(run_id, topic, spans)
+        except Exception as e:
+            print(f"[RAG] Failed to extract indexed chunks: {e}")
+            
+        _progress(2, "Extraction Engine Completed (Grounding Spans Mined)", "done")
     task_research.callback = task_research_cb
 
     def task_hypothesis_cb(*args): _progress(4, "Reasoning Core: Hypothesis Proposed", "done")
@@ -236,6 +259,9 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
                     print(f"[CrewAI] Indexed {len(grounding_spans)} grounding spans into ChromaDB")
     except Exception as e:
         print(f"[CrewAI] Warning: Failed to index grounding spans: {e}")
+
+    # Cleanup DB: Free vector storage after run is done to avoid bloating Chroma
+    clear_run_spans(run_id)
 
     return {
         "final_paper": str(final_paper),

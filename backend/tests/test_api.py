@@ -125,6 +125,7 @@ def test_create_run_with_valid_topic():
         mock_collection = MagicMock()
         mock_doc_ref = MagicMock()
         mock_doc_ref.id = "new_test_run"
+        mock_doc_ref.get.return_value.to_dict.return_value = {"status": "pending"}
         
         mock_collection.document.return_value = mock_doc_ref
         mock_db.collection.return_value = mock_collection
@@ -134,7 +135,7 @@ def test_create_run_with_valid_topic():
             "llm_config": {"vibe": "Deep Academic"}
         })
         
-        assert response.status_code in (200, 201, 503)
+        assert response.status_code in (200, 201, 202, 503)
 
 
 def test_list_runs_returns_list():
@@ -242,7 +243,7 @@ def test_long_topic_handled():
         "llm_config": {}
     })
     # Should either accept or reject gracefully
-    assert response.status_code in (200, 201, 400, 422, 503)
+    assert response.status_code in (200, 201, 202, 400, 422, 503)
 
 
 def test_special_characters_in_topic():
@@ -251,7 +252,7 @@ def test_special_characters_in_topic():
         "topic": "AI Research: Advanced/Novel [AI] 🤖 <test>",
         "llm_config": {}
     })
-    assert response.status_code in (200, 201, 400, 422, 503)
+    assert response.status_code in (200, 201, 202, 400, 422, 503)
 
 
 def test_runs_pagination():

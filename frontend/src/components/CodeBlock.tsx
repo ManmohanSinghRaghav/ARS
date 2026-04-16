@@ -8,7 +8,7 @@ interface CodeBlockProps {
 
 export default function CodeBlock({ code, language = 'python' }: CodeBlockProps) {
   if (!code) {
-    return <p className="text-gray-500 italic">No code available.</p>;
+    return <p className="text-[#aaabb0] italic">No code available.</p>;
   }
 
   return (
