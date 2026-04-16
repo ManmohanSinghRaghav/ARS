@@ -246,7 +246,7 @@ def delete_run(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """Delete a run."""
+    """Delete a run and all associated data (Firestore, Storage, ChromaDB)."""
     doc_ref = db.collection("runs").document(run_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -255,4 +255,44 @@ def delete_run(
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # 1. Clear ChromaDB embeddings
+    try:
+        from app.pipeline.rag import clear_run_spans
+        clear_run_spans(run_id)
+    except Exception as e:
+        print(f"[Runs] Warning: Failed to clear ChromaDB spans for {run_id}: {e}")
+
+    # 2. Clear Firebase Storage files
+    try:
+        from app.database import get_storage_bucket
+        bucket = get_storage_bucket()
+        if bucket:
+            # Delete paper.md and paper.pdf if they exist
+            blobs = bucket.list_blobs(prefix=f"runs/{run_id}/")
+            for blob in blobs:
+                blob.delete()
+                print(f"[Runs] Deleted storage blob: {blob.name}")
+    except Exception as e:
+        print(f"[Runs] Warning: Failed to clear storage for {run_id}: {e}")
+
+    # 3. Clear Firestore subcollections (progress_steps)
+    try:
+        # Firestore doesn't delete subcollections automatically. 
+        # We must delete documents in a batch.
+        steps_ref = doc_ref.collection("progress_steps")
+        docs = steps_ref.list_documents()
+        batch = db.batch()
+        count = 0
+        for d in docs:
+            batch.delete(d)
+            count += 1
+        if count > 0:
+            batch.commit()
+            print(f"[Runs] Deleted {count} progress steps from Firestore")
+    except Exception as e:
+        print(f"[Runs] Warning: Failed to clear subcollections for {run_id}: {e}")
+
+    # 4. Delete the main run document
     doc_ref.delete()
+    print(f"[Runs] Successfully deleted run {run_id}")
+

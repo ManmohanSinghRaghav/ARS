@@ -131,11 +131,11 @@ app.include_router(auth.router)
 @app.on_event("startup")
 def on_startup():
     os.makedirs(settings_obj.OUTPUTS_DIR, exist_ok=True)
-    print("─" * 55)
+    print("=" * 55)
     print("  ARS Backend — FastAPI")
     print(f"  Database : Firebase Firestore (NoSQL)")
     print(f"  Outputs  : {settings_obj.OUTPUTS_DIR}")
-    print("─" * 55)
+    print("=" * 55)
 
 
 # ── Health check ──

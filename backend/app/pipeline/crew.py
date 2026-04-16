@@ -54,7 +54,8 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         goal=f"Mines concise structured Grounding Spans and latest papers about: {topic}",
         backstory=(
             "You are an expert AI literature parsing engine. "
-            "Use the LiteratureSearchTool to answer only with essential verbatim evidence and metadata. "
+            "You MUST ONLY use the 'LiteratureSearchTool' for discovery. Do not attempt to use any other search tool names. "
+            "Answer only with essential verbatim evidence and metadata. "
             "Do not include the full tool output in your reasoning; instead summarize and extract exact grounding spans. "
             "Identify missing knowledge edges while keeping the prompt size minimal."
         ),
@@ -167,13 +168,13 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     def task_research_cb(task_output): 
         # Attempt to index chunks
         try:
-            raw_text = task_output.raw_content
+            raw_text = task_output.raw
             # Split roughly by paragraphs or sentences
             chunks = raw_text.split('\n\n')
             spans = []
             for chunk in chunks:
-                if len(chunk.strip()) > 50:
-                    spans.append({"text": chunk, "source": "task_research_output"})
+                if len(chunk.strip()) > 30:
+                    spans.append({"text": chunk, "source": "Literature Review Extraction"})
             if spans:
                 index_grounding_spans(run_id, topic, spans)
         except Exception as e:
@@ -191,7 +192,7 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     def task_verify_cb(*args):
         # Validate hallucination threshold
         try:
-            val = task_verify.output.raw_content
+            val = task_verify.output.raw
             parsed = json.loads(val[val.find('['):val.rfind(']')+1])
             speculative_ops = sum(1 for c in parsed if c.get('status') == 'Speculative')
             if speculative_ops > len(parsed) / 2:
@@ -228,20 +229,20 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     # Summary formatting (RefLens Grounding extraction)
     summary_data = {}
     try:
-        if task_verify.output and task_verify.output.raw_content:
-            raw_vid = task_verify.output.raw_content
+        if task_verify.output and task_verify.output.raw:
+            raw_vid = task_verify.output.raw
             json_block = raw_vid[raw_vid.find('['):raw_vid.rfind(']')+1]
             if json_block:
                 summary_data = {"grounding": json.loads(json_block)}
             else:
                  summary_data = {"grounding": json.loads(raw_vid)}
     except:
-        summary_data = {"grounding": task_verify.output.raw_content if task_verify.output else "FAILED JSON PARSE"}
+        summary_data = {"grounding": task_verify.output.raw if task_verify.output else "FAILED JSON PARSE"}
 
     # Index grounding spans into ChromaDB for semantic retrieval and verification
     try:
-        if task_verify.output and task_verify.output.raw_content:
-            raw_vid = task_verify.output.raw_content
+        if task_verify.output and task_verify.output.raw:
+            raw_vid = task_verify.output.raw
             json_block = raw_vid[raw_vid.find('['):raw_vid.rfind(']')+1]
             if json_block:
                 grounding_cards = json.loads(json_block)
@@ -265,8 +266,8 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
 
     return {
         "final_paper": str(final_paper),
-        "hypothesis": str(task_hypothesis.output.raw_content if task_hypothesis.output else "N/A"),
-        "execution_output": str(task_experiment.output.raw_content if task_experiment.output else "N/A"),
-        "retrieved_docs": str(task_research.output.raw_content if task_research.output else "N/A"),
+        "hypothesis": str(task_hypothesis.output.raw if task_hypothesis.output else "N/A"),
+        "execution_output": str(task_experiment.output.raw if task_experiment.output else "N/A"),
+        "retrieved_docs": str(task_research.output.raw if task_research.output else "N/A"),
         "summary_data": summary_data
     }

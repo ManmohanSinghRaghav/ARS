@@ -104,6 +104,7 @@ def get_rag_collection(collection_name: str = "research_grounding_spans"):
         # Use Gemini embeddings to avoid unstable local model downloads in threading
         ef = GoogleGenerativeAiEmbeddingFunction(
             api_key=settings.GEMINI_API_KEY or "dummy-key-fallback",
+            model_name="models/gemini-embedding-001",
         )
         
         # Get or create collection with metadata for filtering

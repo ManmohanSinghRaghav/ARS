@@ -34,16 +34,24 @@ class RetryingLLM(LLM):
             return super().call(*args, **kwargs)
         except Exception as e:
             err_str = str(e).lower()
-            # Catch token context limits on Groq or RateLimits that persist
-            if getattr(self, "_fallback_model", None) and ("context" in err_str or "token" in err_str or "too large" in err_str or "413" in err_str or "400" in err_str):
-                print(f"[LLM] Token limit or parsing issue hit on {self.model}. Yielding fallback to {self._fallback_model}...")
+            is_ratelimit = "429" in err_str or "rate limit" in err_str
+            is_context = "context" in err_str or "token" in err_str or "too large" in err_str or "413" in err_str or "400" in err_str
+            
+            # Catch token context limits or rate limits that persist
+            if getattr(self, "_fallback_model", None) and (is_context or is_ratelimit):
+                print(f"[LLM] Error hit on {self.model}: {e}. Yielding fallback to {self._fallback_model}...")
                 orig_model = self.model
                 orig_key = getattr(self, "api_key", None)
                 try:
                     self.model = self._fallback_model
                     if getattr(self, "_fallback_key", None):
                         self.api_key = self._fallback_key
+                    # We call super().call directly to avoid the @retry decorator on the fallback call
+                    # which might have different retry requirements, but for now we keep it simple.
                     return super().call(*args, **kwargs)
+                except Exception as inner_e:
+                    print(f"[LLM] Fallback to {self._fallback_model} also failed: {inner_e}")
+                    raise inner_e
                 finally:
                     # Restore
                     self.model = orig_model
@@ -72,6 +80,7 @@ def get_llm(user_settings: Optional[dict] = None) -> LLM:
 def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
     """
     Returns a CrewAI `LLM` instance. Offloads Extraction and Critic to Groq if key is present.
+    Uses 'google/' prefix for Gemini to satisfy LiteLLM provider requirements.
     """
     cfg = _get_effective_config(user_settings)
     backend = cfg["llm_backend"]
@@ -87,8 +96,12 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
         
     groq_key = (cfg.get("groq_api_key") or "").strip()
 
+    # Use google/ prefix for all Gemini models to ensure LiteLLM resolves the provider correctly
+    # Note: gemini-3.1-flash-lite requires -preview suffix in current SDK
+    GEMINI_FALLBACK = "google/gemini-3.1-flash-lite-preview"
+
     if tier == "reasoning":
-        return RetryingLLM(model="gemini-3.1-flash-lite", temperature=0.7, api_key=gemini_key)
+        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.7, api_key=gemini_key)
     
     if tier == "extraction":
         if groq_key:
@@ -96,10 +109,10 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
                 model="groq/llama-3.1-8b-instant", 
                 temperature=0.1, 
                 api_key=groq_key,
-                fallback_model="gemini-3.1-flash-lite",
+                fallback_model=GEMINI_FALLBACK,
                 fallback_key=gemini_key
             )
-        return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.1, api_key=gemini_key)
+        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.1, api_key=gemini_key)
         
     if tier == "critic":
         if groq_key:
@@ -107,10 +120,11 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
                 model="groq/llama-3.3-70b-versatile", 
                 temperature=0.2, 
                 api_key=groq_key,
-                fallback_model="gemini-3.1-flash-lite",
+                fallback_model=GEMINI_FALLBACK,
                 fallback_key=gemini_key
             )
-        return RetryingLLM(model="gemini-3.1-flash-lite-preview", temperature=0.2, api_key=gemini_key)
+        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.2, api_key=gemini_key)
 
     # Backward-compatible default for any unexpected tier.
-    return RetryingLLM(model="gemini-3.1-flash-lite", temperature=0.0, api_key=gemini_key)
+    return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.0, api_key=gemini_key)
+
