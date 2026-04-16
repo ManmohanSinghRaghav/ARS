@@ -96,12 +96,12 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
         
     groq_key = (cfg.get("groq_api_key") or "").strip()
 
-    # Use google/ prefix for all Gemini models to ensure LiteLLM resolves the provider correctly
+    # Use gemini/ prefix for all Gemini models to ensure LiteLLM resolves the provider correctly
     # Note: gemini-3.1-flash-lite requires -preview suffix in current SDK
-    GEMINI_FALLBACK = "google/gemini-3.1-flash-lite-preview"
+    GEMINI_FALLBACK = "gemini/gemini-3.1-flash-lite-preview"
 
     if tier == "reasoning":
-        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.7, api_key=gemini_key)
+        return RetryingLLM(model="gemini/gemini-3.1-pro-preview", temperature=0.7, api_key=gemini_key)
     
     if tier == "extraction":
         if groq_key:

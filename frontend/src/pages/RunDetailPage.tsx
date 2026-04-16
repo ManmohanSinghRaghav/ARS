@@ -28,6 +28,11 @@ export default function RunDetailPage() {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab | 'grounding'>('paper');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedMarkdown, setEditedMarkdown] = useState('');
+  const [refinementFeedback, setRefinementFeedback] = useState('');
+  const [showRefineModal, setShowRefineModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -81,6 +86,36 @@ export default function RunDetailPage() {
       navigate('/history');
     } catch {
       toast.error('Failed to delete run');
+    }
+  };
+
+  const handleManualSave = async () => {
+    if (!run || !editedMarkdown) return;
+    setIsSubmitting(true);
+    try {
+      await runsAPI.updatePaper(run.id, editedMarkdown);
+      setRun({ ...run, paper_markdown: editedMarkdown });
+      setIsEditing(false);
+      toast.success('Paper updated');
+    } catch {
+      toast.error('Failed to update paper');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRefine = async () => {
+    if (!run || !refinementFeedback) return;
+    setIsSubmitting(true);
+    try {
+      await runsAPI.refinePaper(run.id, refinementFeedback);
+      toast.success('Refinement mission started! Check progress in History.');
+      setShowRefineModal(false);
+      setRun({ ...run, status: 'refining' });
+    } catch {
+      toast.error('Failed to start refinement');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -141,6 +176,26 @@ export default function RunDetailPage() {
               >
                 Download PDF
               </button>
+              <button
+                onClick={() => {
+                  setIsEditing(!isEditing);
+                  setEditedMarkdown(run.paper_markdown);
+                }}
+                className={`px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${
+                  isEditing 
+                    ? 'bg-[#a1faff] text-black border-[#a1faff]' 
+                    : 'bg-transparent text-[#a1faff] border-[#a1faff]/40 hover:bg-[#a1faff]/10'
+                }`}
+              >
+                {isEditing ? 'Cancel Editing' : 'Edit Manually'}
+              </button>
+              <button
+                onClick={() => setShowRefineModal(true)}
+                className="px-4 py-2 bg-purple-500/20 text-purple-300 border border-purple-500/40 rounded-lg text-sm font-medium hover:bg-purple-500/30 transition-colors"
+                disabled={run.status === 'refining'}
+              >
+                {run.status === 'refining' ? 'Refining...' : 'Refine with AI'}
+              </button>
             </>
           )}
           <button
@@ -180,8 +235,27 @@ export default function RunDetailPage() {
       </div>
 
       {/* Tab content */}
-      <div className="bg-slate-800/40 rounded-xl shadow-lg border border-[#a1faff]/20 p-6">
-        {activeTab === 'paper' && <PaperViewer markdown={run.paper_markdown} />}
+      <div className="bg-slate-800/40 rounded-xl shadow-lg border border-[#a1faff]/20 p-6 relative">
+        {activeTab === 'paper' && (
+          isEditing ? (
+            <div className="flex flex-col gap-4">
+              <textarea
+                value={editedMarkdown}
+                onChange={(e) => setEditedMarkdown(e.target.value)}
+                className="w-full h-[600px] bg-black/30 text-white p-4 font-mono rounded-lg border border-[#a1faff]/20 focus:outline-none focus:border-[#a1faff]"
+              />
+              <button
+                onClick={handleManualSave}
+                disabled={isSubmitting}
+                className="self-end px-6 py-2 bg-[#a1faff] text-black rounded-lg font-bold hover:bg-[#88eef4] transition-colors disabled:opacity-50"
+              >
+                {isSubmitting ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          ) : (
+            <PaperViewer markdown={run.paper_markdown} />
+          )
+        )}
 
         {activeTab === 'hypothesis' && (
           run.hypothesis
@@ -242,6 +316,41 @@ export default function RunDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Refinement Modal */}
+      {showRefineModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-[#a1faff]/30 rounded-2xl shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in duration-200">
+            <h2 className="text-xl font-bold text-[#f6f6fc] mb-2">Request AI Refinement</h2>
+            <p className="text-sm text-[#aaabb0] mb-4">
+              Describe how you want the AI to improve or expand your paper. Our Peer Reviewer agent will rewrite 
+              the relevant sections based on your feedback.
+            </p>
+            <textarea
+              placeholder="e.g., Expand the methodology section to include more details on the OODA loop..."
+              value={refinementFeedback}
+              onChange={(e) => setRefinementFeedback(e.target.value)}
+              className="w-full h-32 bg-black/40 text-white p-3 rounded-lg border border-[#a1faff]/20 focus:outline-none focus:border-[#a1faff] mb-4"
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowRefineModal(false)}
+                className="px-4 py-2 text-[#aaabb0] hover:text-[#f6f6fc] transition-colors"
+                disabled={isSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRefine}
+                disabled={isSubmitting || !refinementFeedback}
+                className="px-6 py-2 bg-[#a1faff] text-black rounded-lg font-bold hover:bg-[#88eef4] transition-colors disabled:opacity-50"
+              >
+                {isSubmitting ? 'Starting...' : 'Submit Mission'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

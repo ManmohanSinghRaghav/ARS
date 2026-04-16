@@ -12,6 +12,8 @@ from app.pipeline.tools import search_literature, sandbox_execute, retrieve_grou
 from app.pipeline.llm_factory import get_tier_llm
 from app.pipeline.progress import add_step
 from app.pipeline.rag import index_grounding_spans, clear_run_spans
+from app.pipeline.result_extractor import extract_results_from_output
+from app.pipeline.templates.latex_base import LATEX_TEMPLATE, NEURIPS_LATEX_STYLE
 
 # --- Initialize Global LLM API Caching ---
 _settings = get_settings()
@@ -43,8 +45,9 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
 
     # Helper function to report to UI
     def _progress(step: int, title: str, status: str = "running", detail: str = ""):
-        add_step(run_id, step, 10, title, status, detail)
-        print(f"[CrewAI] Step {step}/10 - {title}")
+        # Total steps in modular pipeline is roughly 12 (including writing segments)
+        add_step(run_id, step, 12, title, status, detail)
+        print(f"[CrewAI] Step {step}/12 - {title}")
 
     # ==========================================
     # AGENTS (v3.1 Architecture)
@@ -109,12 +112,12 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     )
 
     academic_writer = Agent(
-        role="Senior Academic Publisher",
-        goal=f"Draft a formal, publication-ready research paper with the requested '{target_vibe}' tone.",
+        role="Senior Academic Publisher (LaTeX Expert)",
+        goal=f"Draft a formal, publication-ready research paper in professional LaTeX with high technical depth.",
         backstory=(
-            "You weave verified claims and experimental results into beautiful, rigorous Markdown papers with LaTeX formulas. "
-            "You MUST use RetrieveGroundingSpansTool to pull verbatim context from literature. "
-            "Outputs must follow the Cognitive Surface format including Grounding Spans."
+            "You weave verified claims and experimental results into beautiful, rigorous LaTeX documents. "
+            "You MUST use LaTeX environments for sections, math, algorithms, and tables. "
+            "You follow a deep multi-stage writing strategy to ensure large, comprehensive manuscripts."
         ),
         llm=reasoning_llm,
         tools=[retrieve_grounding_spans_tool],
@@ -157,11 +160,80 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         async_execution=False  # Gating synchronization point
     )
 
-    task_writing = Task(
-        description=f"Compile all verified claims, code, and findings into a strict '{target_vibe}' Markdown Research Paper. You MUST use RetrieveGroundingSpansTool to pull the verbatim text of the verified claims to weave into your writing. Include LaTeX formulas (e.g., $E=mc^2$). DO NOT include 'Speculative' claims.",
-        expected_output="A complete, professional markdown string representing the final generated Paper.",
+    # --- Extraction Component (POST Experiment) ---
+    result_card = {}
+    def task_experiment_cb(task_output):
+        nonlocal result_card
+        _progress(6, "Sandbox Execution: Karpathy Move complete", "done")
+        try:
+            result_card = extract_results_from_output(task_output.raw)
+            print(f"[CrewAI] Extracted Result Card: {json.dumps(result_card, indent=2)}")
+        except Exception as e:
+            print(f"[CrewAI] Warning: Result extraction failed: {e}")
+    task_experiment.callback = task_experiment_cb
+
+    # --- Modular Writing Tasks (DEEP SEQUENTIAL) ---
+    prompts = NEURIPS_LATEX_STYLE["prompts"]
+    
+    task_intro = Task(
+        description=prompts["introduction"].replace("{{topic}}", topic),
+        expected_output="A deep, multi-paragraph LaTeX Introduction section.",
         agent=academic_writer,
-        context=[task_verify],
+        context=[task_research, task_hypothesis],
+        async_execution=False
+    )
+
+    task_rw = Task(
+        description=prompts["related_work"],
+        expected_output="A comprehensive LaTeX Related Work section.",
+        agent=academic_writer,
+        context=[task_research],
+        async_execution=False
+    )
+
+    task_methodology = Task(
+        description=prompts["methodology"],
+        expected_output="A rigorous LaTeX Methodology section with formulas and algorithm environments.",
+        agent=academic_writer,
+        context=[task_hypothesis, task_experiment],
+        async_execution=False
+    )
+
+    task_results = Task(
+        description=prompts["results"].replace("{{latex_table}}", result_card.get("latex_table", "N/A")),
+        expected_output="The Experiments and Results section in professional LaTeX.",
+        agent=academic_writer,
+        context=[task_experiment, task_verify],
+        async_execution=False
+    )
+
+    task_conclusion = Task(
+        description=prompts["conclusion"],
+        expected_output="LaTeX Conclusion and Discussion sections.",
+        agent=academic_writer,
+        context=[task_intro, task_methodology, task_results],
+        async_execution=False
+    )
+
+    task_abstract = Task(
+        description="Synthesize the findings into a high-impact LaTeX Abstract.",
+        expected_output="A professional LaTeX Abstract.",
+        agent=academic_writer,
+        context=[task_intro, task_methodology, task_results],
+        async_execution=False
+    )
+
+    # FINAL ASSEMBLY TASK
+    task_compilation = Task(
+        description=(
+            "Combine all sections into a single valid LaTeX document using the predefined structure. "
+            "Ensure all packages mentioned in the prompt are correctly used. "
+            "The final output must be exactly what goes between \\begin{document} and \\end{document}, "
+            "preserving the hierarchical sectioning."
+        ),
+        expected_output="A complete, professional LaTeX string representing the paper body.",
+        agent=academic_writer,
+        context=[task_abstract, task_intro, task_rw, task_methodology, task_results, task_conclusion],
         async_execution=False
     )
 
@@ -186,8 +258,8 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     def task_hypothesis_cb(*args): _progress(4, "Reasoning Core: Hypothesis Proposed", "done")
     task_hypothesis.callback = task_hypothesis_cb
 
-    def task_experiment_cb(*args): _progress(6, "Sandbox Execution: Karpathy Move complete", "done")
-    task_experiment.callback = task_experiment_cb
+    # Corrected callback for experiment to use our internal logic
+    # (already handled in methodology task setup above via nonlocal result_card)
 
     def task_verify_cb(*args):
         # Validate hallucination threshold
@@ -204,8 +276,8 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
             
     task_verify.callback = task_verify_cb
 
-    def task_writing_cb(*args): _progress(10, "Cognitive Surface Generated", "done")
-    task_writing.callback = task_writing_cb
+    def task_compilation_cb(*args): _progress(12, "Final Manuscript Compiled & Synchronized", "done")
+    task_compilation.callback = task_compilation_cb
 
     # ==========================================
     # CREW
@@ -214,17 +286,26 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     _progress(1, "Orchestrating agents via Real-Time Router...")
     crew = Crew(
         agents=[researcher, lead_scientist, ml_engineer, verifier, academic_writer],
-        tasks=[task_research, task_hypothesis, task_experiment, task_verify, task_writing],
+        tasks=[
+            task_research, task_hypothesis, task_experiment, task_verify, 
+            task_intro, task_rw, task_methodology, task_results, task_conclusion, task_abstract, task_compilation
+        ],
         process=Process.sequential,
         verbose=True
     )
 
-    print("[CrewAI] Kicking off Agentic Lifecycle (OODA Loop)...")
+    print("[CrewAI] Kicking off Deep LaTeX Lifecycle...")
     try:
-        final_paper = crew.kickoff()
+        final_body = crew.kickoff()
     except Exception as e:
         print(f"[CrewAI] Reflexion Error: {e}")
         raise e
+
+    # Assemble the full LaTeX document
+    final_latex = LATEX_TEMPLATE.replace("[[TITLE]]", topic.title())
+    final_latex = final_latex.replace("[[ABSTRACT]]", str(task_abstract.output.raw if task_abstract.output else "N/A"))
+    final_latex = final_latex.replace("[[CONTENT]]", str(final_body))
+    final_latex = final_latex.replace("[[REFERENCES]]", "No external references provided.") # Placeholder
 
     # Summary formatting (RefLens Grounding extraction)
     summary_data = {}
@@ -265,9 +346,60 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
     # clear_run_spans(run_id)
 
     return {
-        "final_paper": str(final_paper),
+        "final_paper": final_latex,
         "hypothesis": str(task_hypothesis.output.raw if task_hypothesis.output else "N/A"),
         "execution_output": str(task_experiment.output.raw if task_experiment.output else "N/A"),
         "retrieved_docs": str(task_research.output.raw if task_research.output else "N/A"),
         "summary_data": summary_data
     }
+
+def refine_paper(original_paper_id: str, feedback: str, run_id: str, db, llm_config: dict | None = None) -> str:
+    """
+    Triggers a secondary pipeline to refine an existing research paper based on user feedback.
+    """
+    doc = db.collection("runs").document(original_paper_id).get()
+    if not doc.exists:
+        raise ValueError("Original run not found")
+    
+    run_data = doc.to_dict()
+    topic = run_data.get("topic", "Unknown")
+    original_paper = run_data.get("paper_markdown", "")
+    
+    reasoning_llm = get_tier_llm("reasoning", llm_config)
+    
+    academic_refiner = Agent(
+        role="Senior Peer Reviewer & Editor",
+        goal=f"Rewrite and improve the research paper based on the feedback: {feedback}",
+        backstory=(
+            "You are a meticulous editor. You take an existing manuscript and refine it "
+            "to address specific critiques while maintaining academic rigor and LaTeX formatting."
+        ),
+        llm=reasoning_llm,
+        allow_delegation=False,
+        verbose=True,
+    )
+
+    task_refine = Task(
+        description=(
+            f"Original Paper Topic: {topic}\n"
+            f"Feedback: {feedback}\n\n"
+            f"Original Content:\n{original_paper}\n\n"
+            "Please rewrite the parts of the paper relevant to the feedback. "
+            "Ensure the final output is a complete, well-structured professional LaTeX paper."
+        ),
+        expected_output="The complete refined research paper in professional LaTeX.",
+        agent=academic_refiner,
+        async_execution=False
+    )
+
+    crew = Crew(
+        agents=[academic_refiner],
+        tasks=[task_refine],
+        process=Process.sequential,
+        verbose=True
+    )
+
+    print(f"[CrewAI] Kicking off Refinement Loop for {run_id}...")
+    refined_paper = crew.kickoff()
+    
+    return str(refined_paper)

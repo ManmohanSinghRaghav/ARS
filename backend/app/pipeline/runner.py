@@ -10,7 +10,8 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.pipeline.crew import run_crew_pipeline
+from app.pipeline.crew import run_crew_pipeline, refine_paper
+from app.pipeline.compiler import compile_latex_to_pdf
 from app.pipeline.progress import add_step, clear as clear_progress
 from app.pipeline.runtime_context import set_tavily_api_key, set_run_id
 from app.config import get_settings
@@ -106,33 +107,43 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
                 else (llm_config or {}).get("ollama_model", default_ollama)
             )
 
-            # CrewAI returns the markdown paper, hypothesis overview, and execution run stats
-            paper_markdown = result.get("final_paper", "")
+            # CrewAI returns the full LaTeX document
+            paper_latex = result.get("final_paper", "")
 
-            # Upload paper to storage if bucket is configured
+            # Compile to PDF
+            pdf_success = False
+            pdf_filename = f"paper_{run_id}.pdf"
+            pdf_local_path = os.path.join(outputs_dir, pdf_filename)
+            
+            if paper_latex:
+                print(f"[Pipeline] Compiling LaTeX for run {run_id}...")
+                pdf_success = compile_latex_to_pdf(paper_latex, pdf_local_path)
+
+            # Upload to storage
             from app.database import get_storage_bucket
             storage_bucket = get_storage_bucket()
-            if storage_bucket and paper_markdown:
+            if storage_bucket:
+                # Upload .tex
                 try:
-                    blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
-                    blob.upload_from_string(paper_markdown, content_type="text/markdown")
-                    print(f"[Pipeline] Paper uploaded to Storage: runs/{run_id}/paper.md")
+                    tex_blob = storage_bucket.blob(f"runs/{run_id}/paper.tex")
+                    tex_blob.upload_from_string(paper_latex, content_type="text/x-tex")
                 except Exception as e:
-                    print(f"[Pipeline] Warning: Failed to upload paper to storage: {e}")
+                    print(f"[Pipeline] Warning: Tex upload failed: {e}")
+                
+                # Upload .pdf
+                if pdf_success:
+                    try:
+                        pdf_blob = storage_bucket.blob(f"runs/{run_id}/paper.pdf")
+                        pdf_blob.upload_from_filename(pdf_local_path, content_type="application/pdf")
+                    except Exception as e:
+                        print(f"[Pipeline] Warning: PDF upload failed: {e}")
 
             run_ref.update({
                 "status": "completed",
                 "hypothesis": result.get("hypothesis", ""),
-                "generated_code": "", # Removed explicitly to just rely on execution output logs
+                "generated_code": "", 
                 "execution_output": result.get("execution_output", ""),
-                "paper_markdown": paper_markdown,
-                "summary_json": {
-                    "topic": topic,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "llm_backend": backend,
-                    "model": model_name,
-                    **result.get("summary_data", {})
-                },
+                "paper_markdown": paper_latex,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
 
@@ -151,3 +162,59 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
                 time.sleep(30)
                 clear_progress(run_id)
             threading.Thread(target=_cleanup, daemon=True).start()
+def refine_pipeline(run_id: str, feedback: str, user_id: str, db, 
+                    llm_config: Optional[dict] = None) -> dict:
+    """
+    Launch a refinement pipeline in a background thread for an existing run.
+    """
+    run_ref = db.collection("runs").document(run_id)
+    run_ref.update({"status": "refining"})
+    
+    thread = threading.Thread(
+        target=_execute_refinement,
+        args=(run_id, feedback, user_id, llm_config),
+        daemon=True,
+    )
+    thread.start()
+    
+    return {"status": "refining", "run_id": run_id}
+
+def _execute_refinement(run_id: str, feedback: str, user_id: str, llm_config: Optional[dict]):
+    """Background thread: runs paper refinement and updates the DB record."""
+    from app.database import db_client
+    if db_client is None: return
+    run_ref = db_client.collection("runs").document(run_id)
+    
+    try:
+        set_run_id(run_id)
+        add_step(run_id, 0, 10, f"Refining paper based on feedback: {feedback[:30]}...", "running")
+        
+        refined_paper = refine_paper(
+            original_paper_id=run_id,
+            feedback=feedback,
+            run_id=run_id,
+            db=db_client,
+            llm_config=llm_config
+        )
+        
+        # Upload refined paper to storage
+        from app.database import get_storage_bucket
+        storage_bucket = get_storage_bucket()
+        if storage_bucket:
+            try:
+                blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
+                blob.upload_from_string(refined_paper, content_type="text/markdown")
+            except Exception as e:
+                print(f"[Pipeline] Warning: Failed to upload refined paper: {e}")
+                
+        run_ref.update({
+            "status": "completed",
+            "paper_markdown": refined_paper,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        add_step(run_id, 10, 10, "Refinement complete", "done")
+        
+    except Exception as e:
+        run_ref.update({"status": "failed", "error_message": str(e)})
+        add_step(run_id, 0, 10, f"Refinement failed: {e}", "error")
+        traceback.print_exc()

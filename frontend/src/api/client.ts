@@ -54,6 +54,8 @@ export const runsAPI = {
   downloadPaper: (id: string) => client.get(`/runs/${id}/paper`, { responseType: 'text' }),
   downloadPaperPdf: (id: string) => client.get(`/runs/${id}/paper.pdf`, { responseType: 'blob' }),
   delete: (id: string) => client.delete(`/runs/${id}`),
+  updatePaper: (id: string, markdown: string) => client.patch(`/runs/${id}/paper`, { paper_markdown: markdown }),
+  refinePaper: (id: string, feedback: string) => client.post(`/runs/${id}/refine`, { feedback }),
 };
 
 export const settingsAPI = {

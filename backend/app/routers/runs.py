@@ -10,7 +10,7 @@ from typing import List
 from app.database import get_db
 from app.auth.dependencies import User, get_current_user
 from app.schemas.run import RunCreate
-from app.pipeline.runner import run_pipeline
+from app.pipeline.runner import run_pipeline, refine_pipeline
 from app.pipeline.progress import get_steps
 from app.config import get_settings
 from app.security.crypto import decrypt_str
@@ -171,25 +171,36 @@ def download_paper(
         storage_bucket = get_storage_bucket()
         if storage_bucket:
             try:
-                blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
-                paper_markdown = blob.download_as_string(raw_download=False).decode("utf-8")
-                print(f"[Runs] Paper retrieved from Storage: runs/{run_id}/paper.md")
-            except Exception as e:
-                print(f"[Runs] Warning: Failed to fetch paper from storage: {e}. Falling back to Firestore.")
-                paper_markdown = run.get("paper_markdown", "")
-        else:
-            paper_markdown = run.get("paper_markdown", "")
-    else:
-        # Fallback to Firestore if storage not configured
-        paper_markdown = run.get("paper_markdown", "")
-    
-    if not paper_markdown:
+                # Priority 1: paper.tex
+                blob = storage_bucket.blob(f"runs/{run_id}/paper.tex")
+                content = blob.download_as_string(raw_download=False).decode("utf-8")
+                return PlainTextResponse(
+                    content=content,
+                    media_type="text/x-tex",
+                    headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.tex"'},
+                )
+            except Exception:
+                # Priority 2: paper.md
+                try:
+                    blob = storage_bucket.blob(f"runs/{run_id}/paper.md")
+                    content = blob.download_as_string(raw_download=False).decode("utf-8")
+                    return PlainTextResponse(
+                        content=content,
+                        media_type="text/markdown",
+                        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.md"'},
+                    )
+                except Exception:
+                    pass
+
+    # Fallback to Firestore
+    content = run.get("paper_markdown", "")
+    if not content:
         raise HTTPException(status_code=404, detail="No paper available for this run")
 
     return PlainTextResponse(
-        content=paper_markdown,
-        media_type="text/markdown",
-        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.md"'},
+        content=content,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.txt"'},
     )
 
 
@@ -211,33 +222,38 @@ def download_paper_pdf(
     if not paper_md:
         raise HTTPException(status_code=404, detail="No paper available for this run")
 
-    # Generate a simple PDF. We use core fonts (Latin-1); unsupported characters
-    # are dropped to ensure generation succeeds without bundling extra fonts.
-    from fpdf import FPDF
+    import os
+    settings = get_settings()
+    from app.database import get_storage_bucket
+    
+    # 1. Try Storage
+    if settings.FIREBASE_STORAGE_BUCKET:
+        bucket = get_storage_bucket()
+        if bucket:
+            try:
+                blob = bucket.blob(f"runs/{run_id}/paper.pdf")
+                if blob.exists():
+                    pdf_bytes = blob.download_as_bytes()
+                    return Response(
+                        content=pdf_bytes,
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.pdf"'},
+                    )
+            except Exception:
+                pass
 
-    topic = (run.get("topic") or "Research Paper").strip()
-    pdf = FPDF(unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=12)
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=16)
-    pdf.multi_cell(0, 8, text=topic)
-    pdf.ln(2)
-    pdf.set_font("Courier", size=10)
+    # 2. Try Local outputs
+    pdf_local = os.path.join(settings.OUTPUTS_DIR, f"paper_{run_id}.pdf")
+    if os.path.exists(pdf_local):
+        with open(pdf_local, "rb") as f:
+            pdf_bytes = f.read()
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.pdf"'},
+            )
 
-    safe_text = paper_md.encode("latin-1", "ignore").decode("latin-1")
-    pdf.multi_cell(0, 5, text=safe_text)
-
-    out = pdf.output(dest="S")
-    if isinstance(out, (bytes, bytearray)):
-        pdf_bytes = bytes(out)
-    else:
-        pdf_bytes = out.encode("latin-1", "ignore")
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.pdf"'},
-    )
+    raise HTTPException(status_code=404, detail="Compiled PDF not found for this run.")
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -296,3 +312,70 @@ def delete_run(
     doc_ref.delete()
     print(f"[Runs] Successfully deleted run {run_id}")
 
+@router.patch("/{run_id}/paper")
+def update_paper(
+    run_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Manually update the paper markdown for a run."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    new_content = payload.get("paper_markdown")
+    if not new_content:
+        raise HTTPException(status_code=400, detail="paper_markdown is required")
+
+    # Update Firestore
+    doc_ref.update({"paper_markdown": new_content})
+    
+    # Update Storage if available
+    from app.config import get_settings
+    from app.database import get_storage_bucket
+    settings = get_settings()
+    if settings.FIREBASE_STORAGE_BUCKET:
+        bucket = get_storage_bucket()
+        if bucket:
+            blob = bucket.blob(f"runs/{run_id}/paper.md")
+            blob.upload_from_string(new_content, content_type="text/markdown")
+
+    return {"status": "success", "message": "Paper updated manually"}
+
+@router.post("/{run_id}/refine")
+def start_refinement(
+    run_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Start an AI refinement process on an existing paper."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    feedback = payload.get("feedback")
+    if not feedback:
+        raise HTTPException(status_code=400, detail="feedback is required")
+
+    llm_config, _ = _get_user_llm_config(current_user, db)
+    
+    res = refine_pipeline(
+        run_id=run_id,
+        feedback=feedback,
+        user_id=current_user.id,
+        db=db,
+        llm_config=llm_config
+    )
+    return res
