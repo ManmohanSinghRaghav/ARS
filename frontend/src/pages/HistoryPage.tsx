@@ -11,167 +11,331 @@ interface RunListItem {
   completed_at: string | null;
 }
 
+type SortOption = 'date-desc' | 'date-asc' | 'status';
+type FilterOption = 'all' | 'running' | 'completed' | 'failed';
+
 export default function HistoryPage() {
   const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>('date-desc');
+  const [filterBy, setFilterBy] = useState<FilterOption>('all');
+  const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     fetchRuns();
+    
+    // Set up polling to refresh runs every 5 seconds
+    const interval = setInterval(fetchRuns, 5000);
+    setPollInterval(interval);
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, []);
 
   const fetchRuns = async () => {
-    setLoading(true);
     try {
-      const res = await runsAPI.list(0, 50);
-      setRuns(res.data || []);
-    } catch {
-      // Intentionally silent handle
+      setError(null);
+      const res = await runsAPI.list(0, 100);
+      const allRuns = res.data || [];
+      setRuns(allRuns);
+    } catch (err) {
+      setError('Failed to load synthesis history. Please try again.');
+      console.error('Failed to fetch runs:', err);
     } finally {
       setLoading(false);
     }
   };
 
+  const getFilteredRuns = () => {
+    let filtered = [...runs];
+    
+    // Apply filter
+    if (filterBy !== 'all') {
+      filtered = filtered.filter(run => {
+        if (filterBy === 'running') return run.status === 'running';
+        if (filterBy === 'completed') return run.status === 'completed';
+        if (filterBy === 'failed') return run.status === 'failed';
+        return true;
+      });
+    }
+
+    // Apply sort
+    filtered.sort((a, b) => {
+      if (sortBy === 'date-desc') {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      if (sortBy === 'date-asc') {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      if (sortBy === 'status') {
+        const statusOrder = { running: 0, completed: 1, failed: 2 };
+        return (statusOrder[a.status as keyof typeof statusOrder] ?? 3) - 
+               (statusOrder[b.status as keyof typeof statusOrder] ?? 3);
+      }
+      return 0;
+    });
+
+    return filtered;
+  };
+
+  const getActiveRun = () => {
+    return runs.find(run => run.status === 'running');
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric', 
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusColor = (status: string) => {
+    if (status === 'running') return 'text-[#00f4fe]';
+    if (status === 'completed') return 'text-[#00ff88]';
+    if (status === 'failed') return 'text-[#ff0055]';
+    return 'text-[#aaabb0]';
+  };
+
+  const getStatusBgColor = (status: string) => {
+    if (status === 'running') return 'bg-[#00f4fe]/10';
+    if (status === 'completed') return 'bg-[#00ff88]/10';
+    if (status === 'failed') return 'bg-[#ff0055]/10';
+    return 'bg-[#23262c]';
+  };
+
+  const filteredRuns = getFilteredRuns();
+  const activeRun = getActiveRun();
+  const hasCompletedRuns = runs.some(run => run.status === 'completed');
+
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-7xl mx-auto">
       {/* Header Section */}
-      <header className="mb-16">
+      <header className="mb-12">
         <h1 className="font-['Space_Grotesk'] text-5xl font-bold tracking-tight text-white mb-2">
           Synthesis <span className="text-[#a1faff]">History</span>
         </h1>
         <p className="text-[#aaabb0] font-['Manrope'] text-lg max-w-xl">
-          A temporal log of cognitive evolution and molecular assembly sequences processed by the Ethereal Lab.
+          A temporal log of {runs.length} cognitive evolution and molecular assembly sequences processed by the Ethereal Lab.
         </p>
       </header>
 
-          {/* Current Synthesis Card */}
-          <section className="mb-20">
-            <div className="glass-card rounded-xl p-8 relative overflow-hidden group border border-[#a1faff]/5">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-[#a1faff]/5 blur-[100px] -translate-y-1/2 translate-x-1/2"></div>
-              <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="bg-[#a1faff]/10 text-[#a1faff] text-[10px] font-['Space_Grotesk'] font-bold tracking-widest px-3 py-1 rounded-full uppercase">Active Sequence</span>
-                    <span className="text-[#aaabb0] text-xs font-['Inter']">EST. COMPLETION: 04:12:00</span>
-                  </div>
-                  <h2 className="font-['Space_Grotesk'] text-3xl font-bold text-white mb-4">Neural Pathway Mapping v.4.0</h2>
-                  <p className="text-[#aaabb0] font-['Manrope'] mb-8 max-w-lg">Simulation of tertiary cortical structures with adaptive bio-feedback loops for autonomous reasoning optimization.</p>
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-end mb-1">
-                      <span className="text-xs font-['Inter'] text-[#a1faff] uppercase tracking-tighter">Integration Progress</span>
-                      <span className="text-2xl font-['Space_Grotesk'] font-bold text-[#a1faff]">68.4%</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[#23262c] rounded-full overflow-hidden">
-                      <div className="liquid-progress h-full w-[68.4%] rounded-full"></div>
-                    </div>
-                  </div>
+      {/* Error State */}
+      {error && (
+        <div className="mb-8 p-4 rounded-lg bg-[#ff0055]/10 border border-[#ff0055]/30 text-[#ff0055] font-['Manrope']">
+          {error}
+        </div>
+      )}
+
+      {/* Active Synthesis Card - Dynamic */}
+      {activeRun && (
+        <section className="mb-20">
+          <div className="glass-card rounded-xl p-8 relative overflow-hidden group border border-[#a1faff]/5">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#a1faff]/5 blur-[100px] -translate-y-1/2 translate-x-1/2"></div>
+            <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-4">
+                  <span className="bg-[#a1faff]/10 text-[#a1faff] text-[10px] font-['Space_Grotesk'] font-bold tracking-widest px-3 py-1 rounded-full uppercase animate-pulse">
+                    ● Active Sequence
+                  </span>
+                  <span className="text-[#aaabb0] text-xs font-['Inter']">Running...</span>
                 </div>
-                <div className="w-full md:w-64 aspect-square rounded-lg overflow-hidden glass-card border border-[#46484d]/20">
-                  <img 
-                    alt="Neural Mapping Visualization" 
-                    className="w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-700" 
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuB5hlVCHj0FK80h2X8lj9zAxICfsi-X65UTYZDUxukQZR0WvBkU3ORCozcz4pqR2YfM7x8w-NnfEDqDSVSCCF557XPVLZPbLniPlqhHavHH3hd6cYVGxKS5W4AhPrW2mdIRheehvJxvY-vOma9KCivJVDF2iIYai55PkELnZ10r-ZikvXxNfOuA6Rr4ZIojbndLoZtVo25X25umEBFzQ2D-FJphoFQRH6g672cLorQ61_tZrCkGrrmkeYsYBdZoVKtf1fmiCJDUxw" 
-                  />
+                <h2 className="font-['Space_Grotesk'] text-3xl font-bold text-white mb-4 line-clamp-2">{activeRun.topic}</h2>
+                <p className="text-[#aaabb0] font-['Manrope'] mb-8 max-w-lg">
+                  Synthesis initiated at {formatDate(activeRun.created_at)}. Monitor progress in real-time.
+                </p>
+                <Link
+                  to={`/runs/${activeRun.id}`}
+                  className="inline-block px-6 py-3 rounded-lg bg-[#a1faff]/10 border border-[#a1faff]/30 text-[#a1faff] font-['Inter'] text-sm font-semibold hover:bg-[#a1faff]/20 transition-all duration-300"
+                >
+                  View Real-time Progress →
+                </Link>
+              </div>
+              <div className="w-full md:w-40 flex flex-col gap-4">
+                <div className="p-4 rounded-lg bg-[#23262c] border border-[#46484d]/20">
+                  <p className="text-[10px] text-[#aaabb0] uppercase font-['Inter'] mb-2">Status</p>
+                  <p className="text-lg font-['Space_Grotesk'] font-bold text-[#00f4fe]">RUNNING</p>
+                </div>
+                <div className="p-4 rounded-lg bg-[#23262c] border border-[#46484d]/20">
+                  <p className="text-[10px] text-[#aaabb0] uppercase font-['Inter'] mb-2">ID</p>
+                  <p className="text-sm font-['Space_Grotesk'] font-bold text-white truncate">{activeRun.id}</p>
                 </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
+      )}
 
-          {/* Archived Nodes Section */}
-          <section>
-            <div className="flex justify-between items-end mb-8">
-              <h3 className="font-['Space_Grotesk'] text-2xl font-semibold text-white">Archived Nodes</h3>
-              <div className="flex gap-4">
-                <button className="text-xs font-['Inter'] uppercase tracking-widest text-[#aaabb0] hover:text-[#a1faff] transition-colors">Sort by Date</button>
-                <button className="text-xs font-['Inter'] uppercase tracking-widest text-[#aaabb0] hover:text-[#a1faff] transition-colors">Filter Type</button>
+      {/* Synthesis Archive Section */}
+      <section>
+        <div className="flex justify-between items-end mb-8 flex-wrap gap-4">
+          <div>
+            <h3 className="font-['Space_Grotesk'] text-2xl font-semibold text-white mb-2">
+              Archived Nodes {filteredRuns.length > 0 && `(${filteredRuns.length})`}
+            </h3>
+            <p className="text-xs text-[#aaabb0] font-['Manrope']">Total syntheses: {runs.length}</p>
+          </div>
+          <div className="flex gap-4 flex-wrap">
+            {/* Sort Dropdown */}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              className="text-xs font-['Inter'] uppercase tracking-widest bg-[#23262c] border border-[#46484d]/30 text-[#aaabb0] px-3 py-2 rounded hover:border-[#a1faff]/50 hover:text-[#a1faff] transition-colors cursor-pointer"
+            >
+              <option value="date-desc">Newest First</option>
+              <option value="date-asc">Oldest First</option>
+              <option value="status">By Status</option>
+            </select>
+
+            {/* Filter Dropdown */}
+            <select
+              value={filterBy}
+              onChange={(e) => setFilterBy(e.target.value as FilterOption)}
+              className="text-xs font-['Inter'] uppercase tracking-widest bg-[#23262c] border border-[#46484d]/30 text-[#aaabb0] px-3 py-2 rounded hover:border-[#a1faff]/50 hover:text-[#a1faff] transition-colors cursor-pointer"
+            >
+              <option value="all">All Syntheses</option>
+              <option value="running">Running Only</option>
+              <option value="completed">Completed Only</option>
+              <option value="failed">Failed Only</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Content */}
+        {loading ? (
+          <div className="col-span-3 text-center py-20">
+            <div className="inline-flex flex-col items-center gap-4">
+              <div className="w-12 h-12 rounded-full border-2 border-[#a1faff]/30 border-t-[#a1faff] animate-spin"></div>
+              <p className="text-[#aaabb0] font-['Manrope']">Scanning temporal archives...</p>
+            </div>
+          </div>
+        ) : filteredRuns.length === 0 ? (
+          <div className="text-center py-20 px-8">
+            <div className="inline-flex flex-col items-center gap-4">
+              <span className="material-symbols-outlined text-5xl text-[#aaabb0]/50">folder_open</span>
+              <div>
+                <p className="text-lg font-['Space_Grotesk'] text-[#aaabb0] mb-2">No Archived Nodes</p>
+                <p className="text-sm text-[#aaabb0] font-['Manrope']">
+                  {filterBy !== 'all'
+                    ? `No ${filterBy} syntheses found. Try adjusting your filters.`
+                    : 'Start a new synthesis from the dashboard to see results here.'}
+                </p>
               </div>
             </div>
-            
-            {/* Bento Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {loading ? (
-                <div className="col-span-3 text-center py-12 text-[#aaabb0]">Loading runs...</div>
-              ) : runs.length === 0 ? (
-                <div className="col-span-3 text-center py-12 text-[#aaabb0]">No archived nodes found.</div>
-              ) : (
-                runs.map((run, i) => {
-                  const dateStr = new Date(run.completed_at || run.created_at).toLocaleDateString();
-                  const pattern = i % 4;
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {filteredRuns.map((run, i) => {
+              const pattern = i % 4;
 
-                  if (pattern === 0) {
-                    return (
-                      <Link to={`/runs/${run.id}`} key={run.id} className="md:col-span-2 bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group block">
-                        <div className="flex justify-between items-start mb-6">
-                          <div>
-                            <h4 className="font-['Space_Grotesk'] text-xl font-bold text-white group-hover:text-[#a1faff] transition-colors">{run.topic}</h4>
-                            <p className="text-xs font-['Inter'] text-[#aaabb0] mt-1 uppercase">COMPLETED: {dateStr}</p>
-                          </div>
-                          {run.status === 'completed' && <span className="material-symbols-outlined text-slate-500">verified</span>}
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-1">
-                            <span className="block text-[10px] text-[#aaabb0] uppercase font-['Inter']">Words</span>
-                            <span className="text-lg font-['Space_Grotesk'] text-white">{(run.paper_word_count || 0).toLocaleString()} </span>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="block text-[10px] text-[#aaabb0] uppercase font-['Inter']">Status</span>
-                            <span className="text-lg font-['Space_Grotesk'] text-white uppercase">{run.status}</span>
-                          </div>
-                        </div>
-                      </Link>
-                    );
-                  }
-
-                  if (pattern === 1) {
-                    return (
-                      <Link to={`/runs/${run.id}`} key={run.id} className="bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group flex flex-col justify-between">
-                        <div>
-                          <span className={`material-symbols-outlined text-[#ac89ff] mb-4 ${run.status === 'running' ? 'animate-spin' : ''}`}>cyclone</span>
-                          <h4 className="font-['Space_Grotesk'] text-xl font-bold text-white mb-2 line-clamp-2">{run.topic}</h4>
-                          <p className="text-sm text-[#aaabb0] font-['Manrope']">Data run spanning {(run.paper_word_count || 0)} tokens.</p>
-                        </div>
-                        <div className="mt-8 pt-4 border-t border-[#46484d]/10">
-                          <span className="text-[10px] font-['Inter'] text-[#00e5ee] uppercase tracking-widest">STATUS: {run.status}</span>
-                        </div>
-                      </Link>
-                    );
-                  }
-
-                  if (pattern === 2) {
-                    return (
-                      <Link to={`/runs/${run.id}`} key={run.id} className="bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group block">
-                        <div className="w-full aspect-video rounded-lg mb-4 overflow-hidden">
-                          <img 
-                            alt="Crystal Structure" 
-                            className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500" 
-                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuB71LTaouw4PIg7Yk1zRTJJtS3B1bYXAQMesVKODm0I-MUB_6yTZPLEdy78vWtrrkSEktEdLSuJyoW8OJI4ZPCz_mQH6VB5GT8nrIkOUN-wQU21PwPPCoW247bVABQPSULKQ7XRtmS-S76STkMWet2kbmkf0CmZEIM85amT_oQOvFe0AFv-xTi0MToTq1RD0dvThayelt10hHccwdgNjjXkJg01wZ6z1reQ5e_LiAY0O_DggHRDUqNlNDf31arh6yFdidY4xKvj7g" 
-                          />
-                        </div>
-                        <h4 className="font-['Space_Grotesk'] text-lg font-bold text-white truncate">{run.topic}</h4>
-                        <p className="text-xs font-['Inter'] text-[#aaabb0] mt-1 uppercase">{run.status} • {dateStr}</p>
-                      </Link>
-                    );
-                  }
-
-                  return (
-                    <Link to={`/runs/${run.id}`} key={run.id} className="md:col-span-2 bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors flex items-center justify-between group">
-                      <div className="flex items-center gap-6">
-                        <div className="p-4 rounded-full bg-[#23262c]">
-                          <span className="material-symbols-outlined text-[#a1faff] text-3xl">data_thresholding</span>
-                        </div>
-                        <div>
-                          <h4 className="font-['Space_Grotesk'] text-xl font-bold text-white truncate max-w-sm">{run.topic}</h4>
-                          <p className="text-sm text-[#aaabb0] max-w-md">Completed on {dateStr} with {run.paper_word_count} words.</p>
-                        </div>
+              if (pattern === 0) {
+                return (
+                  <Link to={`/runs/${run.id}`} key={run.id} className="md:col-span-2 bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group block border border-[#46484d]/20 hover:border-[#a1faff]/30">
+                    <div className="flex justify-between items-start mb-6">
+                      <div>
+                        <h4 className="font-['Space_Grotesk'] text-xl font-bold text-white group-hover:text-[#a1faff] transition-colors line-clamp-2">{run.topic}</h4>
+                        <p className="text-xs font-['Inter'] text-[#aaabb0] mt-2 uppercase">{formatDate(run.created_at)}</p>
                       </div>
-                      <div className="p-3 rounded-full border border-[#46484d]/30 text-[#aaabb0] group-hover:text-[#a1faff] group-hover:border-[#a1faff]/50 transition-all hidden sm:flex">
-                        <span className="material-symbols-outlined">chevron_right</span>
+                      <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-['Space_Grotesk'] font-bold tracking-widest uppercase ${getStatusBgColor(run.status)} ${getStatusColor(run.status)}`}>
+                        {run.status}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <span className="block text-[10px] text-[#aaabb0] uppercase font-['Inter']">Words</span>
+                        <span className="text-2xl font-['Space_Grotesk'] font-bold text-[#a1faff]">{(run.paper_word_count || 0).toLocaleString()}</span>
                       </div>
-                    </Link>
-                  );
-                })
-              )}
-            </div>
-          </section>
+                      <div className="space-y-1">
+                        <span className="block text-[10px] text-[#aaabb0] uppercase font-['Inter']">Completed</span>
+                        <span className="text-sm font-['Manrope'] text-[#aaabb0]">
+                          {run.completed_at ? formatDate(run.completed_at) : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              }
+
+              if (pattern === 1) {
+                return (
+                  <Link to={`/runs/${run.id}`} key={run.id} className="bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group flex flex-col justify-between border border-[#46484d]/20 hover:border-[#a1faff]/30">
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <span className={`material-symbols-outlined text-2xl ${run.status === 'running' ? 'animate-spin text-[#a1faff]' : getStatusColor(run.status)}`}>
+                          {run.status === 'running' ? 'cyclone' : run.status === 'completed' ? 'check_circle' : 'error'}
+                        </span>
+                        <span className={`text-[10px] font-['Space_Grotesk'] font-bold tracking-widest uppercase ${getStatusColor(run.status)}`}>
+                          {run.status}
+                        </span>
+                      </div>
+                      <h4 className="font-['Space_Grotesk'] text-lg font-bold text-white mb-3 line-clamp-3">{run.topic}</h4>
+                      <p className="text-sm text-[#aaabb0] font-['Manrope']">
+                        {run.paper_word_count > 0 ? `${run.paper_word_count.toLocaleString()} words` : 'Paper not yet generated'}
+                      </p>
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-[#46484d]/20">
+                      <span className="text-[10px] font-['Inter'] text-[#aaabb0] uppercase tracking-widest">{formatDate(run.created_at)}</span>
+                    </div>
+                  </Link>
+                );
+              }
+
+              if (pattern === 2) {
+                return (
+                  <Link to={`/runs/${run.id}`} key={run.id} className="bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors group block overflow-hidden border border-[#46484d]/20 hover:border-[#a1faff]/30">
+                    <div className="flex justify-between items-start mb-4">
+                      <h4 className="font-['Space_Grotesk'] text-lg font-bold text-white line-clamp-2 flex-1">{run.topic}</h4>
+                      <span className={`material-symbols-outlined text-xl flex-shrink-0 ml-2 ${getStatusColor(run.status)}`}>
+                        {run.status === 'running' ? 'schedule' : run.status === 'completed' ? 'task_alt' : 'close'}
+                      </span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-[#aaabb0] font-['Inter']">Word Count</span>
+                        <span className="text-sm font-['Space_Grotesk'] font-bold text-[#a1faff]">{(run.paper_word_count || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-[#aaabb0] font-['Inter']">Status</span>
+                        <span className={`text-xs font-['Space_Grotesk'] font-bold uppercase ${getStatusColor(run.status)}`}>{run.status}</span>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-[#46484d]/20">
+                        <span className="text-xs text-[#aaabb0] font-['Inter']">Created</span>
+                        <span className="text-xs text-[#aaabb0]">{new Date(run.created_at).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              }
+
+              return (
+                <Link to={`/runs/${run.id}`} key={run.id} className="md:col-span-2 bg-[#111318] rounded-xl p-6 hover:bg-[#1d2025] transition-colors flex items-center justify-between group border border-[#46484d]/20 hover:border-[#a1faff]/30">
+                  <div className="flex items-center gap-6 flex-1 min-w-0">
+                    <div className={`p-3 rounded-full flex-shrink-0 ${getStatusBgColor(run.status)}`}>
+                      <span className={`material-symbols-outlined text-2xl ${getStatusColor(run.status)}`}>
+                        {run.status === 'running' ? 'autorenew' : run.status === 'completed' ? 'done' : 'report'}
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-['Space_Grotesk'] text-lg font-bold text-white truncate">{run.topic}</h4>
+                      <p className="text-sm text-[#aaabb0] font-['Manrope'] line-clamp-1">
+                        {run.paper_word_count} words • {formatDate(run.created_at)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-full border border-[#46484d]/30 text-[#aaabb0] group-hover:text-[#a1faff] group-hover:border-[#a1faff]/50 transition-all hidden sm:flex flex-shrink-0">
+                    <span className="material-symbols-outlined">chevron_right</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
