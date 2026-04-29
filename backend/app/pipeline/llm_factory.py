@@ -35,11 +35,12 @@ class RetryingLLM(LLM):
         except Exception as e:
             err_str = str(e).lower()
             is_ratelimit = "429" in err_str or "rate limit" in err_str
+            is_quota_exceeded = "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str
             is_context = "context" in err_str or "token" in err_str or "too large" in err_str or "413" in err_str or "400" in err_str
             
-            # Catch token context limits or rate limits that persist
-            if getattr(self, "_fallback_model", None) and (is_context or is_ratelimit):
-                print(f"[LLM] Error hit on {self.model}: {e}. Yielding fallback to {self._fallback_model}...")
+            # Catch token context limits, quota limits, or rate limits that persist
+            if getattr(self, "_fallback_model", None) and (is_context or is_quota_exceeded or is_ratelimit):
+                print(f"[LLM] Error hit on {self.model}: {e}. Falling back to {self._fallback_model}...")
                 orig_model = self.model
                 orig_key = getattr(self, "api_key", None)
                 try:
@@ -67,6 +68,7 @@ def _get_effective_config(user_settings: Optional[dict] = None) -> dict:
     return {
         "llm_backend": llm_backend.lower(),
         "gemini_api_key": (user_settings or {}).get("gemini_api_key") or defaults.GEMINI_API_KEY,
+        "gemini_model": (user_settings or {}).get("gemini_model") or defaults.GEMINI_MODEL or "gemini-3.1-flash-lite-preview",
         "groq_api_key": (user_settings or {}).get("groq_api_key") or defaults.GROQ_API_KEY,
         "mlx_model": (user_settings or {}).get("mlx_model") or defaults.MLX_MODEL,
         "ollama_model": (user_settings or {}).get("ollama_model") or defaults.OLLAMA_MODEL,
@@ -97,11 +99,19 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
     groq_key = (cfg.get("groq_api_key") or "").strip()
 
     # Use gemini/ prefix for all Gemini models to ensure LiteLLM resolves the provider correctly
-    # Note: gemini-3.1-flash-lite requires -preview suffix in current SDK
+    # Get the selected gemini model (defaults to flash-lite for free tier)
+    gemini_model = cfg.get("gemini_model") or "gemini-3.1-flash-lite-preview"
+    GEMINI_MAIN = f"gemini/{gemini_model}"
     GEMINI_FALLBACK = "gemini/gemini-3.1-flash-lite-preview"
 
     if tier == "reasoning":
-        return RetryingLLM(model="gemini/gemini-3.1-pro-preview", temperature=0.7, api_key=gemini_key)
+        return RetryingLLM(
+            model=GEMINI_MAIN, 
+            temperature=0.7, 
+            api_key=gemini_key,
+            fallback_model=GEMINI_FALLBACK,
+            fallback_key=gemini_key
+        )
     
     if tier == "extraction":
         if groq_key:
@@ -112,7 +122,13 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
                 fallback_model=GEMINI_FALLBACK,
                 fallback_key=gemini_key
             )
-        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.1, api_key=gemini_key)
+        return RetryingLLM(
+            model=GEMINI_MAIN, 
+            temperature=0.1, 
+            api_key=gemini_key,
+            fallback_model=GEMINI_FALLBACK,
+            fallback_key=gemini_key
+        )
         
     if tier == "critic":
         if groq_key:
@@ -123,8 +139,20 @@ def get_tier_llm(tier: str, user_settings: Optional[dict] = None) -> LLM:
                 fallback_model=GEMINI_FALLBACK,
                 fallback_key=gemini_key
             )
-        return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.2, api_key=gemini_key)
+        return RetryingLLM(
+            model=GEMINI_MAIN, 
+            temperature=0.2, 
+            api_key=gemini_key,
+            fallback_model=GEMINI_FALLBACK,
+            fallback_key=gemini_key
+        )
 
     # Backward-compatible default for any unexpected tier.
-    return RetryingLLM(model=GEMINI_FALLBACK, temperature=0.0, api_key=gemini_key)
+    return RetryingLLM(
+        model=GEMINI_MAIN, 
+        temperature=0.0, 
+        api_key=gemini_key,
+        fallback_model=GEMINI_FALLBACK,
+        fallback_key=gemini_key
+    )
 

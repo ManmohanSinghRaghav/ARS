@@ -35,6 +35,7 @@ def get_user_settings(
     return SettingsResponse(
         llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
         gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
+        gemini_model=us.get("gemini_model") or defaults.GEMINI_MODEL or "gemini-3.1-flash-lite-preview",
         groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
         mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
         ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,
@@ -60,6 +61,17 @@ def update_user_settings(
         us["llm_backend"] = payload.llm_backend
     if payload.gemini_api_key is not None:
         us["gemini_api_key"] = encrypt_str(payload.gemini_api_key)
+    if payload.gemini_model is not None:
+        # Validate model choice
+        valid_models = [
+            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-2.0-flash-exp",
+        ]
+        if payload.gemini_model not in valid_models:
+            raise HTTPException(status_code=400, detail=f"gemini_model must be one of: {', '.join(valid_models)}")
+        us["gemini_model"] = payload.gemini_model
     if payload.groq_api_key is not None:
         us["groq_api_key"] = encrypt_str(payload.groq_api_key)
     if payload.mlx_model is not None:
@@ -76,6 +88,7 @@ def update_user_settings(
     return SettingsResponse(
         llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
         gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
+        gemini_model=us.get("gemini_model") or defaults.GEMINI_MODEL or "gemini-3.1-flash-lite-preview",
         groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
         mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
         ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,

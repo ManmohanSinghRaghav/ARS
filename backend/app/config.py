@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # ── LLM defaults (overridable per-user via settings API) ──
     LLM_BACKEND: str = "gemini"
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite-preview"  # Default Gemini model
     GROQ_API_KEY: str = ""
     MLX_MODEL: str = "mlx-community/Qwen2.5-3B-Instruct-bf16"
     OLLAMA_MODEL: str = "qwen2.5:3b"
