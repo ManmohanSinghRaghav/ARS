@@ -17,21 +17,9 @@ export default function ProtectedRoute({ children }: Props) {
     );
   }
 
-  // If not authenticated, show login modal overlay with blurred dashboard behind
+  // If not authenticated, show login modal only
   if (!user) {
-    return (
-      <div className="relative min-h-screen">
-        {/* Blurred content behind */}
-        <div className="blur-sm pointer-events-none select-none">
-          {children}
-        </div>
-        
-        {/* Login modal overlay */}
-        <div className="fixed inset-0 z-50">
-          <LoginPage isModal={true} />
-        </div>
-      </div>
-    );
+    return <LoginPage />;
   }
 
   return <>{children}</>;

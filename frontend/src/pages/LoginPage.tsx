@@ -2,11 +2,7 @@ import { useState, FormEvent } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import toast from 'react-hot-toast';
 
-interface LoginPageProps {
-  isModal?: boolean;
-}
-
-export default function LoginPage({ isModal = false }: LoginPageProps) {
+export default function LoginPage() {
   const { login, register, loginWithGoogle } = useAuth();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
   const [loading, setLoading] = useState(false);
@@ -74,11 +70,7 @@ export default function LoginPage({ isModal = false }: LoginPageProps) {
   };
 
   return (
-    <div className={`${
-      isModal 
-        ? 'absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4' 
-        : 'fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50'
-    }`}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       {/* Background blur overlay */}
       <div className="absolute inset-0 bg-gradient-to-br from-primary-900/20 via-primary-800/10 to-primary-950/20"></div>
 
