@@ -1,6 +1,6 @@
-import { Navigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { ReactNode } from 'react';
+import LoginPage from '../pages/LoginPage';
 
 interface Props {
   children: ReactNode;
@@ -17,8 +17,21 @@ export default function ProtectedRoute({ children }: Props) {
     );
   }
 
+  // If not authenticated, show login modal overlay with blurred dashboard behind
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <div className="relative min-h-screen">
+        {/* Blurred content behind */}
+        <div className="blur-sm pointer-events-none select-none">
+          {children}
+        </div>
+        
+        {/* Login modal overlay */}
+        <div className="fixed inset-0 z-50">
+          <LoginPage isModal={true} />
+        </div>
+      </div>
+    );
   }
 
   return <>{children}</>;
