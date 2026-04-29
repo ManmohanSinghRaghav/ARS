@@ -1,4 +1,4 @@
-# ARS — Autonomous Research Scientist
+# ARS - Autonomous Research Scientist
 
 A multi-agent pipeline that autonomously searches literature, generates novel hypotheses, writes experiment code, executes it, and produces research papers — powered by a local LLM via **MLX** (macOS) or **Ollama** (any platform).
 
