@@ -1,9 +1,14 @@
-"""
-ChromaDB-based Retrieval-Augmented Generation (RAG) for research verification.
-Indexes grounding spans and enables semantic retrieval during verification phase.
+"""app.pipeline.rag
+
+ChromaDB-based Retrieval-Augmented Generation (RAG).
+
+Currently used for:
+- Grounding spans ("research_grounding_spans")
+- Mission logs ("mission_logs")
 """
 
 import os
+import threading
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -14,7 +19,10 @@ from app.config import get_settings
 
 # Global Chroma client
 _chroma_client = None
-_chroma_collection = None
+
+# Cache collections by name (we use multiple collections).
+_collections: dict[str, object] = {}
+_collections_lock = threading.Lock()
 
 
 def get_chroma_client():
@@ -89,12 +97,15 @@ def get_chroma_client():
 
 
 def get_rag_collection(collection_name: str = "research_grounding_spans"):
-    """Get or create a Chroma collection for storing grounding spans."""
-    global _chroma_collection
-    
+    """Get or create a Chroma collection by name."""
     client = get_chroma_client()
     if client is None:
         return None
+
+    with _collections_lock:
+        cached = _collections.get(collection_name)
+    if cached is not None:
+        return cached
     
     try:
         from chromadb.utils.embedding_functions import GoogleGenerativeAiEmbeddingFunction
@@ -113,11 +124,136 @@ def get_rag_collection(collection_name: str = "research_grounding_spans"):
             embedding_function=ef,
             metadata={"hnsw:space": "cosine"},
         )
-        _chroma_collection = collection
+        with _collections_lock:
+            _collections[collection_name] = collection
         return collection
     except Exception as e:
         print(f"[RAG] Warning: Failed to get/create collection: {e}")
         return None
+
+
+def index_mission_log(run_id: str, entry: dict) -> None:
+    """Index a progress step entry into a dedicated Chroma collection.
+
+    This enables semantic search over the research process.
+    Metadata includes `run_id` for filtering.
+    """
+    collection = get_rag_collection(collection_name="mission_logs")
+    if collection is None:
+        return
+
+    try:
+        title = str(entry.get("title") or "").strip()
+        detail = str(entry.get("detail") or "").strip()
+        output = str(entry.get("output") or "").strip()
+
+        if not (title or detail or output):
+            return
+
+        base_text = "\n".join(
+            [
+                f"TITLE: {title}" if title else "",
+                f"DETAIL: {detail}" if detail else "",
+                f"OUTPUT: {output}" if output else "",
+            ]
+        ).strip()
+        if not base_text:
+            return
+
+        import hashlib
+
+        step = entry.get("step")
+        total = entry.get("total")
+        status = str(entry.get("status") or "").strip()
+        timestamp = str(entry.get("timestamp") or "").strip()
+        is_internal = bool(entry.get("is_internal"))
+
+        # Chunking to keep payload sizes stable.
+        chunk_size = 1500
+
+        documents: list[str] = []
+        metadatas: list[dict] = []
+        ids: list[str] = []
+
+        for chunk_index in range(0, len(base_text), chunk_size):
+            chunk = base_text[chunk_index : chunk_index + chunk_size]
+            if len(chunk.strip()) < 50:
+                continue
+
+            hash_input = f"{run_id}_{timestamp}_{step}_{chunk_index}_{chunk}".encode("utf-8")
+            doc_id = hashlib.md5(hash_input).hexdigest()
+
+            documents.append(chunk)
+            metadatas.append(
+                {
+                    "run_id": run_id,
+                    "step": int(step) if isinstance(step, int) else (int(step) if str(step).isdigit() else -1),
+                    "total": int(total) if isinstance(total, int) else (int(total) if str(total).isdigit() else -1),
+                    "status": status,
+                    "title": title[:240],
+                    "is_internal": is_internal,
+                    "timestamp": timestamp,
+                    "chunk": int(chunk_index),
+                }
+            )
+            ids.append(doc_id)
+
+        if not documents:
+            return
+
+        # Keep batch sizes sane.
+        batch_size = 100
+        for i in range(0, len(documents), batch_size):
+            collection.upsert(
+                documents=documents[i : i + batch_size],
+                metadatas=metadatas[i : i + batch_size],
+                ids=ids[i : i + batch_size],
+            )
+    except Exception as e:
+        print(f"[RAG] Warning: Failed to index mission log: {e}")
+
+
+def query_mission_logs(
+    query: str,
+    run_id: Optional[str] = None,
+    top_k: int = 10,
+    include_internal: bool = True,
+) -> List[dict]:
+    """Semantic query over mission logs."""
+    collection = get_rag_collection(collection_name="mission_logs")
+    if collection is None:
+        return []
+
+    try:
+        where_filter = {"run_id": {"$eq": run_id}} if run_id else None
+        results = collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=where_filter if where_filter else None,
+        )
+
+        if not results or not results.get("documents") or not results["documents"][0]:
+            return []
+
+        out: list[dict] = []
+        for doc, metadata, distance in zip(
+            results["documents"][0],
+            results.get("metadatas", [[]])[0],
+            results.get("distances", [[]])[0] if results.get("distances") else [0] * len(results["documents"][0]),
+        ):
+            if not include_internal and bool((metadata or {}).get("is_internal")):
+                continue
+            out.append(
+                {
+                    "text": doc,
+                    "distance": distance,
+                    "metadata": metadata or {},
+                }
+            )
+        return out
+    except Exception as e:
+        print(f"[RAG] Warning: Failed to query mission logs: {e}")
+        return []
 
 
 def index_grounding_spans(run_id: str, topic: str, grounding_spans: List[dict]):

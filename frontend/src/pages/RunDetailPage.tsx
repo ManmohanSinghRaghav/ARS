@@ -1,356 +1,726 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { PDFViewer, pdf } from '@react-pdf/renderer';
+import { Sparkles, Download, MessageSquare, Send, Plus, Trash2, Loader2, FileText, Code2, Activity, Image as ImageIcon, Type, RefreshCw, Pencil, Check } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { runsAPI } from '../api/client';
-import PaperViewer from '../components/PaperViewer';
-import CodeBlock from '../components/CodeBlock';
 import toast from 'react-hot-toast';
+import InstantPdfDocument from '../components/InstantPdfDocument';
 
-interface RunDetail {
+interface PaperSection {
   id: string;
-  user_id: string;
-  topic: string;
-  status: string;
-  hypothesis: string;
-  generated_code: string;
-  execution_output: string;
-  paper_markdown: string;
-  summary_json: Record<string, any>;
-  error_message: string;
-  created_at: string;
-  completed_at: string | null;
+  type: string;
+  title: string;
+  content: string;
 }
+interface PaperJson {
+  metadata: { title: string; author: string; date: string; institution: string };
+  sections: PaperSection[];
+}
+interface RunDetail {
+  id: string; topic: string; status: string;
+  hypothesis: string; generated_code: string; execution_output: string;
+  paper_json: PaperJson | null; summary_json: Record<string, any>;
+  version: number;
+  created_at: string; completed_at: string | null;
+}
+type Tab = 'workspace' | 'hypothesis' | 'execution' | 'telemetry';
+interface ChatMsg { role: 'user' | 'assistant'; content: string; }
 
-type Tab = 'paper' | 'hypothesis' | 'code' | 'output' | 'summary';
+const EMPTY_PAPER: PaperJson = {
+  metadata: { title: 'New Paper', author: 'ARS', date: new Date().getFullYear().toString(), institution: 'GLA Research Lab' },
+  sections: []
+};
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab | 'grounding'>('paper');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedMarkdown, setEditedMarkdown] = useState('');
-  const [refinementFeedback, setRefinementFeedback] = useState('');
-  const [showRefineModal, setShowRefineModal] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('workspace');
+  const [paperData, setPaperData] = useState<PaperJson>(EMPTY_PAPER);
+  const [activeBlock, setActiveBlock] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [version, setVersion] = useState(0);
+  const [pdfKey, setPdfKey] = useState(0);
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isAiRefining, setIsAiRefining] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [isDirty, setIsDirty] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refinePoller = useRef<ReturnType<typeof setInterval> | null>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  const [steps, setSteps] = useState<any[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => { 
+    if (id) {
+      loadRun();
+      startPolling(id);
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (refinePoller.current) clearInterval(refinePoller.current);
+    };
+  }, [id]);
+
+  // Fix #2: sync sessionTitle when paperData loads
+  useEffect(() => {
+    if (paperData.metadata.title) setSessionTitle(paperData.metadata.title);
+  }, [paperData.metadata.title]);
 
   useEffect(() => {
+    if (editingTitle) titleInputRef.current?.focus();
+  }, [editingTitle]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  const startPolling = (runId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await runsAPI.progress(runId);
+        setSteps(res.data.steps || []);
+        if (res.data.status === 'completed') {
+          clearInterval(pollRef.current!);
+          loadRun(); // Reload final data
+        }
+      } catch { /* silent */ }
+    }, 3000);
+  };
+
+  const loadRun = async () => {
     if (!id) return;
-    runsAPI
-      .get(id)
-      .then((res) => setRun(res.data))
-      .catch(() => {
-        toast.error('Run not found');
-        navigate('/');
-      })
-      .finally(() => setLoading(false));
-  }, [id, navigate]);
-
-  const handleDownload = async () => {
-    if (!run) return;
     try {
-      const res = await runsAPI.downloadPaper(run.id);
-      const blob = new Blob([res.data], { type: 'text/markdown' });
+      const res = await runsAPI.get(id);
+      setRun(res.data);
+      setVersion(res.data.version || 0);
+      const pj = res.data.paper_json;
+      const isValidPaper = pj && pj.metadata?.title && Array.isArray(pj.sections) && pj.sections.length > 0;
+      setPaperData(isValidPaper ? pj : EMPTY_PAPER);
+    } catch {
+      toast.error('Run not found');
+      navigate('/');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Debounced auto-sync to backend
+  const syncPaper = useCallback((data: PaperJson, v: number) => {
+    if (!id) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(async () => {
+      setIsSyncing(true);
+      try {
+        const res = await runsAPI.updatePaper(id, data, v);
+        setVersion(res.data.version);
+        // Fix #5: removed setPdfKey — only on manual Update Preview click
+      } catch (err: any) {
+        if (err.response?.status === 409) {
+          // Server has a newer version — merge it in safely
+          const detail = err.response.data?.detail;
+          const serverPj = typeof detail === 'object' ? detail?.paper_json : null;
+          const serverVer = typeof detail === 'object' ? detail?.current_version : null;
+          if (serverPj && serverPj.metadata?.title) {
+            setPaperData(serverPj);
+            setVersion(serverVer ?? v);
+            toast.error('Conflict resolved: server version applied');
+          } else {
+            // Reload from server as fallback
+            loadRun();
+            toast.error('Version conflict: reloading latest');
+          }
+        }
+      }
+      finally { setIsSyncing(false); }
+    }, 1200);
+  }, [id]);
+
+  const updateSection = (blockId: string, content: string) => {
+    const next = { ...paperData, sections: paperData.sections.map(s => s.id === blockId ? { ...s, content } : s) };
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const updateMetadata = (key: keyof PaperJson['metadata'], val: string) => {
+    const next = { ...paperData, metadata: { ...paperData.metadata, [key]: val } };
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  // Fix #2: commit editable session title into paper metadata
+  const commitTitle = () => {
+    setEditingTitle(false);
+    if (sessionTitle.trim() && sessionTitle.trim() !== paperData.metadata.title) {
+      updateMetadata('title', sessionTitle.trim());
+    }
+  };
+
+  const addSection = () => {
+    const next = {
+      ...paperData,
+      sections: [...paperData.sections, {
+        id: `sec_${Date.now()}`, type: 'content',
+        title: `Section ${paperData.sections.length + 1}`, content: ''
+      }]
+    };
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const deleteSection = (blockId: string) => {
+    const next = { ...paperData, sections: paperData.sections.filter(s => s.id !== blockId) };
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const aiRefineBlock = async (blockId: string) => {
+    if (!id || !run) return;
+    setIsAiRefining(blockId);
+    const section = paperData.sections.find(s => s.id === blockId);
+    try {
+      const res = await runsAPI.chat(id, [
+        { role: 'user', content: `Please rewrite and improve this section of the paper titled "${section?.title}". Make it more detailed, rigorous, and academic. Current content:\n\n${section?.content}` }
+      ]);
+      updateSection(blockId, res.data.content);
+      toast.success('Section refined by AI');
+    } catch { toast.error('AI refinement failed'); }
+    finally { setIsAiRefining(null); }
+  };
+
+  // Fix #4: Poll backend until run exits 'refining', then reload paper and refresh PDF
+  const startRefinePoller = () => {
+    if (refinePoller.current) clearInterval(refinePoller.current);
+    refinePoller.current = setInterval(async () => {
+      if (!id) return;
+      try {
+        const res = await runsAPI.progress(id);
+        if (res.data.status !== 'refining') {
+          clearInterval(refinePoller.current!);
+          await loadRun();
+          setPdfKey(k => k + 1);
+          toast.success('Manuscript updated by AI', { id: 'refine' });
+        }
+      } catch { clearInterval(refinePoller.current!); }
+    }, 2500);
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || isChatLoading || !id) return;
+    const userMsg: ChatMsg = { role: 'user', content: chatInput.trim() };
+    const history = [...chatMessages, userMsg];
+    setChatMessages(history);
+    setChatInput('');
+    setIsChatLoading(true);
+    try {
+      const res = await runsAPI.chat(id, history);
+      const { content, action_triggered } = res.data;
+      setChatMessages([...history, { role: 'assistant', content: content || 'No response.' }]);
+      if (action_triggered === 'refining') {
+        toast.loading('AI is patching the manuscript...', { id: 'refine' });
+        startRefinePoller(); // Fix #4: poll for completion, then reload
+      }
+    } catch (e: any) {
+      toast.error(`Chat failed: ${e?.response?.data?.detail || 'check backend'}`);
+    }
+    finally { setIsChatLoading(false); }
+  };
+
+  const downloadProPdf = async () => {
+    if (!id) return;
+    toast.loading('Generating Live PDF...', { id: 'pdf' });
+    try {
+      // Generate PDF client-side for "LIVE" results
+      const blob = await pdf(<InstantPdfDocument data={paperData} />).toBlob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `paper_${run.id}.md`;
+      a.download = `${paperData.metadata.title.replace(/\s+/g, '_') || 'research_paper'}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      toast.error('Failed to download paper');
+      toast.success('Live PDF downloaded!', { id: 'pdf' });
+    } catch (err) {
+      console.error(err);
+      toast.error('PDF generation failed', { id: 'pdf' });
     }
   };
 
-  const handleDownloadPdf = async () => {
-    if (!run) return;
-    try {
-      const res = await runsAPI.downloadPaperPdf(run.id);
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `paper_${run.id}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error('Failed to download PDF');
+  useEffect(() => {
+    if (run?.status === 'running' && activeTab !== 'telemetry') {
+      setActiveTab('telemetry');
     }
-  };
+  }, [run?.status, activeTab]);
 
-  const handleDelete = async () => {
-    if (!run || !confirm('Are you sure you want to delete this run?')) return;
-    try {
-      await runsAPI.delete(run.id);
-      toast.success('Run deleted');
-      navigate('/history');
-    } catch {
-      toast.error('Failed to delete run');
-    }
-  };
-
-  const handleManualSave = async () => {
-    if (!run || !editedMarkdown) return;
-    setIsSubmitting(true);
-    try {
-      await runsAPI.updatePaper(run.id, editedMarkdown);
-      setRun({ ...run, paper_markdown: editedMarkdown });
-      setIsEditing(false);
-      toast.success('Paper updated');
-    } catch {
-      toast.error('Failed to update paper');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleRefine = async () => {
-    if (!run || !refinementFeedback) return;
-    setIsSubmitting(true);
-    try {
-      await runsAPI.refinePaper(run.id, refinementFeedback);
-      toast.success('Refinement mission started! Check progress in History.');
-      setShowRefineModal(false);
-      setRun({ ...run, status: 'refining' });
-    } catch {
-      toast.error('Failed to start refinement');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-[#0b0e14]">
+      <div className="flex flex-col items-center gap-4">
+        <Loader2 size={40} className="animate-spin text-[#a1faff]" />
+        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#a1faff] animate-pulse">Loading Research Node...</p>
       </div>
-    );
-  }
+    </div>
+  );
 
   if (!run) return null;
 
-  const tabs: { key: Tab | 'grounding'; label: string }[] = [
-    { key: 'paper', label: 'Paper' },
-    { key: 'hypothesis', label: 'Hypothesis' },
-    { key: 'code', label: 'Code' },
-    { key: 'output', label: 'Execution Output' },
-    { key: 'grounding', label: 'Grounding Card (Verifier)' },
-    { key: 'summary', label: 'Telemetry & Infrastructure' },
+  const tabs = [
+    { key: 'workspace' as Tab, label: 'Paper Lab', icon: <FileText size={15}/> },
+    { key: 'hypothesis' as Tab, label: 'Hypothesis', icon: <Sparkles size={15}/> },
+    { key: 'execution' as Tab, label: 'Execution', icon: <Code2 size={15}/> },
+    { key: 'telemetry' as Tab, label: 'Telemetry', icon: <Activity size={15}/> },
   ];
 
-  const statusColors: Record<string, string> = {
-    completed: 'bg-green-500/20 text-green-300',
-    running: 'bg-blue-500/20 text-blue-300',
-    failed: 'bg-red-500/20 text-red-300',
-    pending: 'bg-yellow-500/20 text-yellow-300',
-  };
+  const statusColor = { completed: 'text-emerald-400', running: 'text-blue-400', failed: 'text-red-400', refining: 'text-purple-400' }[run.status] || 'text-slate-400';
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[#f6f6fc] mb-2">{run.topic}</h1>
-          <div className="flex items-center gap-3 text-sm text-[#aaabb0]">
-            <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[run.status] || 'bg-gray-500/20 text-gray-300'}`}>
-              {run.status}
-            </span>
-            <span>{new Date(run.created_at).toLocaleString()}</span>
-            {run.completed_at && (
-              <span>Completed: {new Date(run.completed_at).toLocaleString()}</span>
+    <div className="flex flex-col h-[calc(100vh-64px)] bg-[#0b0e14] text-[#f6f6fc] overflow-hidden">
+      
+      {/* Top Header */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-white/5 bg-slate-950/60 backdrop-blur-xl shrink-0">
+        <div className="min-w-0 flex-1">
+          {/* Fix #2: Editable session title */}
+          <div className="flex items-center gap-2 group">
+            {editingTitle ? (
+              <>
+                <input
+                  ref={titleInputRef}
+                  value={sessionTitle}
+                  onChange={e => setSessionTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') commitTitle(); if (e.key === 'Escape') setEditingTitle(false); }}
+                  className="text-lg font-black tracking-tight bg-transparent border-b border-[#a1faff] outline-none text-[#f6f6fc] min-w-0 flex-1"
+                />
+                <button onClick={commitTitle} className="text-emerald-400 hover:text-emerald-300 shrink-0"><Check size={15}/></button>
+              </>
+            ) : (
+              <>
+                <h1 className="text-lg font-black tracking-tight truncate">{paperData.metadata.title || run.topic}</h1>
+                <button onClick={() => setEditingTitle(true)} className="opacity-0 group-hover:opacity-60 hover:opacity-100 text-[#aaabb0] transition-opacity shrink-0"><Pencil size={13}/></button>
+              </>
             )}
           </div>
+          <div className="flex items-center gap-3 mt-0.5">
+            <span className={`text-[10px] font-black uppercase ${statusColor}`}>{run.status}</span>
+            <span className="text-[10px] text-[#aaabb0]">{new Date(run.created_at).toLocaleDateString()}</span>
+            <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[9px] font-black uppercase ${isSyncing ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}/>
+              {isSyncing ? 'Syncing...' : 'Synced'}
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2">
-          {run.paper_markdown && (
-            <>
-              <button
-                onClick={handleDownload}
-                className="px-4 py-2 bg-[#a1faff]/20 text-[#a1faff] rounded-lg text-sm font-medium hover:bg-[#a1faff]/30 transition-colors"
-              >
-                Download Paper
-              </button>
-              <button
-                onClick={handleDownloadPdf}
-                className="px-4 py-2 bg-[#a1faff]/20 text-[#a1faff] rounded-lg text-sm font-medium hover:bg-[#a1faff]/30 transition-colors"
-              >
-                Download PDF
-              </button>
-              <button
-                onClick={() => {
-                  setIsEditing(!isEditing);
-                  setEditedMarkdown(run.paper_markdown);
-                }}
-                className={`px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${
-                  isEditing 
-                    ? 'bg-[#a1faff] text-black border-[#a1faff]' 
-                    : 'bg-transparent text-[#a1faff] border-[#a1faff]/40 hover:bg-[#a1faff]/10'
-                }`}
-              >
-                {isEditing ? 'Cancel Editing' : 'Edit Manually'}
-              </button>
-              <button
-                onClick={() => setShowRefineModal(true)}
-                className="px-4 py-2 bg-purple-500/20 text-purple-300 border border-purple-500/40 rounded-lg text-sm font-medium hover:bg-purple-500/30 transition-colors"
-                disabled={run.status === 'refining'}
-              >
-                {run.status === 'refining' ? 'Refining...' : 'Refine with AI'}
-              </button>
-            </>
-          )}
-          <button
-            onClick={handleDelete}
-            className="px-4 py-2 bg-red-500/20 text-red-300 rounded-lg text-sm font-medium hover:bg-red-500/30 transition-colors"
-          >
-            Delete
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => { setActiveTab('workspace'); setShowChat(!showChat); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${showChat ? 'bg-[#a1faff] text-slate-950 shadow-[0_0_15px_rgba(161,250,255,0.4)]' : 'bg-slate-800 text-[#aaabb0] hover:text-white'}`}>
+            <MessageSquare size={13}/> Copilot
+          </button>
+          <button onClick={downloadProPdf}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-black uppercase shadow-lg transition-all active:scale-95">
+            <Download size={13}/> Live PDF
           </button>
         </div>
       </div>
 
-      {/* Error message */}
-      {run.error_message && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6">
-          <h3 className="text-red-300 font-medium mb-1">Error</h3>
-          <pre className="text-red-200 text-sm whitespace-pre-wrap font-mono">{run.error_message}</pre>
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="border-b border-[#a1faff]/20 mb-6">
-        <div className="flex space-x-0">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === tab.key
-                  ? 'border-[#a1faff] text-[#a1faff]'
-                  : 'border-transparent text-[#aaabb0] hover:text-[#f6f6fc] hover:border-[#a1faff]/30'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+      {/* Tab Bar */}
+      <div className="flex gap-0 border-b border-white/5 shrink-0 bg-slate-950/40">
+        {tabs.filter(t => run.status !== 'running' || t.key === 'telemetry').map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            className={`flex items-center gap-2 px-5 py-3 text-[10px] font-black uppercase tracking-widest transition-all border-b-2 ${activeTab === t.key ? 'border-[#a1faff] text-[#a1faff] bg-[#a1faff]/5' : 'border-transparent text-[#aaabb0] hover:text-[#f6f6fc]'}`}>
+            {t.icon} {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* Tab content */}
-      <div className="bg-slate-800/40 rounded-xl shadow-lg border border-[#a1faff]/20 p-6 relative">
-        {activeTab === 'paper' && (
-          isEditing ? (
-            <div className="flex flex-col gap-4">
-              <textarea
-                value={editedMarkdown}
-                onChange={(e) => setEditedMarkdown(e.target.value)}
-                className="w-full h-[600px] bg-black/30 text-white p-4 font-mono rounded-lg border border-[#a1faff]/20 focus:outline-none focus:border-[#a1faff]"
-              />
-              <button
-                onClick={handleManualSave}
-                disabled={isSubmitting}
-                className="self-end px-6 py-2 bg-[#a1faff] text-black rounded-lg font-bold hover:bg-[#88eef4] transition-colors disabled:opacity-50"
-              >
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
-          ) : (
-            <PaperViewer markdown={run.paper_markdown} />
-          )
-        )}
-
-        {activeTab === 'hypothesis' && (
-          run.hypothesis
-            ? <PaperViewer markdown={run.hypothesis} />
-            : <div className="text-[#aaabb0] italic">No hypothesis generated.</div>
-        )}
-
-        {activeTab === 'code' && <CodeBlock code={run.generated_code} />}
-
-        {activeTab === 'output' && (
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-[#f6f6fc]">AgentTrace Execution Log</h3>
-            <p className="text-sm text-[#aaabb0] mb-2">Internal Sandbox STDOUT/STDERR captured during the OODA "Karpathy Move" validation.</p>
-            <pre className="bg-black/50 border border-[#a1faff]/30 text-[#a1faff] p-5 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap shadow-inner leading-relaxed">
-              {run.execution_output || '[Execution Trace Empty]'}
-            </pre>
-          </div>
-        )}
-
-        {activeTab === 'grounding' && (
-          <div className="space-y-4 text-sm">
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">RefLens Verification Card (JSON Trace)</h3>
-            <p className="text-gray-500 mb-4">Atomic Claims mapped to Grounding Spans (extracted from PDF/Web endpoints).</p>
-            {run.summary_json && run.summary_json.grounding ? (
-              <pre className="bg-gray-50 border-l-4 border-primary-500 text-gray-800 p-5 rounded font-mono text-sm whitespace-pre-wrap shadow-sm">
-                {typeof run.summary_json.grounding === 'object' 
-                  ? JSON.stringify(run.summary_json.grounding, null, 2) 
-                  : run.summary_json.grounding}
-              </pre>
-            ) : (
-              <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg text-yellow-800 italic">
-                No formal Grounding Card was extracted for this run. Run might have halted early or Verifier JSON parsing failed.
+      {/* Main Content */}
+      <div className="flex-1 overflow-hidden relative flex">
+        
+        {/* WAR ROOM OVERLAY REMOVED - NOW INTEGRATED INTO TELEMETRY TAB */}
+        
+        {/* WORKSPACE TAB */}
+        {activeTab === 'workspace' && (
+          <div className="flex-1 flex overflow-hidden relative">
+            {/* REFINEMENT LOCK OVERLAY */}
+            {run.status === 'refining' && (
+              <div className="absolute inset-0 z-30 bg-slate-950/60 backdrop-blur-[2px] flex items-center justify-center">
+                <div className="glass-card px-8 py-6 flex flex-col items-center gap-4 border-purple-500/30 shadow-[0_0_40px_rgba(168,85,247,0.15)]">
+                  <Loader2 className="animate-spin text-purple-400" size={32}/>
+                  <div className="text-center">
+                    <p className="text-xs font-black text-purple-400 uppercase tracking-[0.2em]">Swarm Refining</p>
+                    <p className="text-[10px] text-slate-500 mt-2">The AI Writer is currently patching the manuscript.<br/>Manual editing is disabled during this phase.</p>
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        )}
+            {/* Left: Block Editor */}
+            <div className="w-[42%] min-w-[320px] border-r border-white/5 flex flex-col overflow-hidden bg-slate-950">
+              <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/60 border-b border-white/5">
+                <span className="text-[9px] font-black uppercase tracking-[0.25em] text-[#aaabb0]">Structural Blocks</span>
+                <button onClick={addSection} className="flex items-center gap-1 text-[#a1faff] hover:scale-110 transition-all p-1 rounded-lg hover:bg-[#a1faff]/10">
+                  <Plus size={14}/>
+                  <span className="text-[9px] font-black uppercase">Add</span>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
+                {/* Metadata Block */}
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-indigo-400 mb-2">Paper Metadata</p>
+                  <input value={paperData.metadata.title} onChange={e => updateMetadata('title', e.target.value)}
+                    className="w-full bg-black/30 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white mb-1.5 focus:border-[#a1faff] outline-none" placeholder="Paper Title"/>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input value={paperData.metadata.author} onChange={e => updateMetadata('author', e.target.value)}
+                      className="bg-black/30 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:border-[#a1faff] outline-none" placeholder="Author"/>
+                    <input value={paperData.metadata.institution} onChange={e => updateMetadata('institution', e.target.value)}
+                      className="bg-black/30 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:border-[#a1faff] outline-none" placeholder="Institution"/>
+                  </div>
+                </div>
 
-        {activeTab === 'summary' && (
-          <div className="space-y-3">
-            {run.summary_json && Object.keys(run.summary_json).length > 0 ? (
-              <table className="w-full text-left">
-                <tbody>
-                  {Object.entries(run.summary_json).filter(([key]) => key !== 'grounding').map(([key, value]) => (
-                    <tr key={key} className="border-b border-gray-100">
-                      <td className="py-2.5 pr-4 text-sm font-medium text-gray-600 w-48 align-top">
-                        {key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-                      </td>
-                      <td className="py-2.5 text-sm text-gray-800 break-words">
-                        {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <span className="text-gray-400 italic">No telemetry data available.</span>
-            )}
-          </div>
-        )}
-      </div>
+                {/* Section Blocks */}
+                {paperData.sections.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-12 text-center space-y-2 opacity-40">
+                    <FileText size={28} className="text-[#aaabb0]"/>
+                    <p className="text-xs text-[#aaabb0]">No sections yet.<br/>Click "Add" to start building.</p>
+                  </div>
+                )}
+                {paperData.sections.map((section) => (
+                  <div key={section.id} onClick={() => setActiveBlock(activeBlock === section.id ? null : section.id)}
+                    className={`group rounded-xl border transition-all cursor-pointer ${activeBlock === section.id ? 'bg-indigo-600/10 border-indigo-500/60 shadow-[0_0_20px_rgba(99,102,241,0.15)]' : 'bg-slate-900 border-slate-800 hover:border-slate-600'}`}>
+                    <div className="flex justify-between items-center px-4 py-2.5">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        {section.type === 'image' ? <ImageIcon size={12} className="text-amber-400" /> : <Type size={12} className="text-indigo-400" />}
+                        <input value={section.title}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => {
+                            const next = { ...paperData, sections: paperData.sections.map(s => s.id === section.id ? { ...s, title: e.target.value } : s) };
+                            setPaperData(next); setIsDirty(true); syncPaper(next, version);
+                          }}
+                          className="text-[10px] font-black text-white uppercase tracking-widest bg-transparent border-none outline-none w-full"/>
+                      </div>
+                      <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <select 
+                          value={section.type}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => {
+                            const next = { ...paperData, sections: paperData.sections.map(s => s.id === section.id ? { ...s, type: e.target.value } : s) };
+                            setPaperData(next); setIsDirty(true); syncPaper(next, version);
+                          }}
+                          className="bg-slate-800 text-[8px] font-bold text-slate-400 uppercase tracking-widest rounded px-1.5 py-0.5 border-none outline-none"
+                        >
+                          <option value="content">Text</option>
+                          <option value="abstract">Abstract</option>
+                          <option value="image">Image</option>
+                        </select>
+                        <button onClick={e => { e.stopPropagation(); aiRefineBlock(section.id); }}
+                          className="p-1 hover:bg-indigo-500/20 rounded-lg transition-all" title="AI Refine">
+                          {isAiRefining === section.id ? <Loader2 size={12} className="animate-spin text-indigo-400"/> : <Sparkles size={12} className="text-indigo-400"/>}
+                        </button>
+                        <button onClick={e => { e.stopPropagation(); deleteSection(section.id); }}
+                          className="p-1 hover:bg-red-500/20 rounded-lg transition-all">
+                          <Trash2 size={12} className="text-slate-500 hover:text-red-400"/>
+                        </button>
+                      </div>
+                    </div>
+                    {activeBlock === section.id ? (
+                      <div className="px-3 pb-3" onClick={e => e.stopPropagation()}>
+                        {section.type === 'image' ? (
+                          <input value={section.content}
+                            onChange={e => updateSection(section.id, e.target.value)}
+                            placeholder="Paste image URL here..."
+                            className="w-full bg-black/40 border border-slate-700 rounded-lg p-3 text-xs leading-relaxed text-slate-200 outline-none focus:border-amber-500 font-mono"/>
+                        ) : (
+                          <textarea value={section.content}
+                            onChange={e => updateSection(section.id, e.target.value)}
+                            autoFocus rows={8}
+                            className="w-full bg-black/40 border border-slate-700 rounded-lg p-3 text-xs leading-relaxed text-slate-200 outline-none focus:border-indigo-500 resize-none font-mono"/>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="px-4 pb-3 text-xs text-slate-500 leading-relaxed line-clamp-2 italic">
+                        {section.type === 'image' ? (section.content ? `Image: ${section.content}` : 'No image URL...') : (section.content || 'Click to edit...')}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
 
-      {/* Refinement Modal */}
-      {showRefineModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-[#a1faff]/30 rounded-2xl shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in duration-200">
-            <h2 className="text-xl font-bold text-[#f6f6fc] mb-2">Request AI Refinement</h2>
-            <p className="text-sm text-[#aaabb0] mb-4">
-              Describe how you want the AI to improve or expand your paper. Our Peer Reviewer agent will rewrite 
-              the relevant sections based on your feedback.
-            </p>
-            <textarea
-              placeholder="e.g., Expand the methodology section to include more details on the OODA loop..."
-              value={refinementFeedback}
-              onChange={(e) => setRefinementFeedback(e.target.value)}
-              className="w-full h-32 bg-black/40 text-white p-3 rounded-lg border border-[#a1faff]/20 focus:outline-none focus:border-[#a1faff] mb-4"
-            />
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowRefineModal(false)}
-                className="px-4 py-2 text-[#aaabb0] hover:text-[#f6f6fc] transition-colors"
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRefine}
-                disabled={isSubmitting || !refinementFeedback}
-                className="px-6 py-2 bg-[#a1faff] text-black rounded-lg font-bold hover:bg-[#88eef4] transition-colors disabled:opacity-50"
-              >
-                {isSubmitting ? 'Starting...' : 'Submit Mission'}
-              </button>
+              {/* Integrated Copilot Chat */}
+              {showChat && (
+                <div className="h-[300px] border-t border-white/10 flex flex-col bg-slate-900/80 backdrop-blur-xl shrink-0">
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-slate-950/40">
+                    <span className="text-[9px] font-black uppercase tracking-[0.25em] text-indigo-400">Integrated Copilot</span>
+                    <button onClick={() => setShowChat(false)} className="text-slate-500 hover:text-white transition-all">
+                      ✕
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
+                    {chatMessages.length === 0 && (
+                      <div className="h-full flex flex-col items-center justify-center text-center space-y-2 opacity-40">
+                        <MessageSquare size={20} className="text-indigo-400" />
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest leading-relaxed">
+                          Request an edit or ask the writer to<br/>explain the logic.
+                        </p>
+                      </div>
+                    )}
+                    {chatMessages.map((m, i) => (
+                      <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[85%] rounded-xl px-3 py-2 text-[11px] leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200 border border-white/5'}`}>
+                          {m.content}
+                        </div>
+                      </div>
+                    ))}
+                    {isChatLoading && (
+                      <div className="flex justify-start">
+                        <Loader2 size={12} className="animate-spin text-indigo-400" />
+                      </div>
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+                  <div className="p-3 bg-slate-950/60 border-t border-white/5">
+                    <div className="relative">
+                      <textarea
+                        value={chatInput}
+                        onChange={e => setChatInput(e.target.value)}
+                        onKeyDown={e => { if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChatMessage(); }}}
+                        rows={1}
+                        placeholder="Request a change..."
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-3 pr-10 py-2 text-xs text-white resize-none focus:border-indigo-500 outline-none transition-all"
+                      />
+                      <button
+                        onClick={sendChatMessage}
+                        disabled={isChatLoading || !chatInput.trim()}
+                        className="absolute right-2 top-1.5 text-indigo-400 hover:text-indigo-300 transition-all disabled:opacity-20"
+                      >
+                        <Send size={14}/>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Live PDF Preview */}
+            <div className="flex-1 bg-slate-950 flex flex-col overflow-hidden">
+              {/* Fix #5: Update Preview button opposite Live Preview label */}
+              <div className="px-4 py-2 border-b border-white/5 bg-slate-900/40 flex items-center justify-between">
+                <span className="text-[9px] font-black uppercase tracking-[0.25em] text-[#aaabb0]">Live Preview</span>
+                <button
+                  disabled={!isDirty}
+                  onClick={() => { setPdfKey(k => k + 1); setIsDirty(false); }}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${isDirty ? 'bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 active:scale-95' : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
+                  title="Refresh PDF preview"
+                >
+                  <RefreshCw size={10}/> Update Preview
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-hidden">
+                {paperData.sections.length > 0 ? (
+                  <PDFViewer key={pdfKey} width="100%" height="100%" showToolbar={false} className="border-none">
+                    <InstantPdfDocument data={paperData} />
+                  </PDFViewer>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center space-y-4 text-center p-12 opacity-30">
+                    <div className="text-6xl">📄</div>
+                    <p className="text-sm text-[#aaabb0] max-w-xs leading-relaxed">
+                      Add sections in the editor to see a live PDF preview here.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* HYPOTHESIS TAB */}
+        {activeTab === 'hypothesis' && (
+          <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-3xl mx-auto">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center text-xl border border-indigo-500/20">💡</div>
+                <div>
+                  <h2 className="text-xl font-black text-[#f6f6fc]">Research Hypothesis</h2>
+                  <p className="text-[9px] text-[#aaabb0] uppercase font-bold tracking-widest">Generated by Lead Research Scientist Agent</p>
+                </div>
+              </div>
+              <div className="p-8 bg-slate-900 rounded-3xl border border-indigo-500/20 shadow-2xl">
+                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{run.hypothesis || 'No hypothesis was generated for this run.'}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EXECUTION TAB — Fix #6: render markdown */}
+        {activeTab === 'execution' && (
+          <div className="flex-1 overflow-y-auto p-8 space-y-6">
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="p-6 bg-slate-900 rounded-2xl border border-slate-800">
+                <h3 className="text-[9px] font-black uppercase tracking-widest text-[#aaabb0] mb-4">Sandbox Code</h3>
+                <div className="rounded-xl overflow-hidden border border-[#a1faff]/10 text-xs">
+                  <SyntaxHighlighter language="python" style={oneDark} customStyle={{ margin: 0, fontSize: '0.72rem', background: '#020617' }}>
+                    {run.generated_code || '# No code generated (Theoretical Mode active).'}
+                  </SyntaxHighlighter>
+                </div>
+              </div>
+              <div className="p-6 bg-slate-900 rounded-2xl border border-slate-800">
+                <h3 className="text-[9px] font-black uppercase tracking-widest text-[#aaabb0] mb-4">Execution Output</h3>
+                {/* Fix #6: ReactMarkdown renders markdown/code blocks like GitHub */}
+                <div className="bg-slate-950 rounded-xl border border-emerald-500/10 p-5 prose prose-invert prose-sm max-w-none prose-code:text-emerald-300 prose-pre:bg-transparent">
+                  <ReactMarkdown
+                    components={{
+                      code(props) {
+                        const { children, className } = props;
+                        const match = /language-(\w+)/.exec(className || '');
+                        return match ? (
+                          <SyntaxHighlighter language={match[1]} style={oneDark} customStyle={{ fontSize: '0.72rem', margin: 0 }}>
+                            {String(children).replace(/\n$/, '')}
+                          </SyntaxHighlighter>
+                        ) : <code className="text-emerald-300 bg-emerald-900/20 px-1 rounded">{children}</code>;
+                      }
+                    }}
+                  >
+                    {run.execution_output || '*No execution output.*'}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TELEMETRY TAB */}
+        {activeTab === 'telemetry' && (
+          <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+            <div className="max-w-5xl mx-auto space-y-12">
+              {run.status === 'running' ? (
+                <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                  <header className="text-center space-y-4">
+                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 animate-pulse">
+                      <Activity size={24} />
+                    </div>
+                    <h2 className="text-3xl font-black tracking-tight uppercase">Swarm Telemetry</h2>
+                    <p className="text-slate-500 max-w-md mx-auto text-xs uppercase tracking-widest">Live Mission Feed • Agentic Research in Progress</p>
+                  </header>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Left: Progress Steps */}
+                    <div className="glass-card p-8 space-y-6">
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Mission Milestones</h3>
+                      <div className="space-y-4 max-h-[500px] overflow-y-auto pr-4 custom-scrollbar">
+                        {steps.filter(s => !s.is_internal).map((s, i) => (
+                          <div key={i} className="flex gap-4 group">
+                            <div className="flex flex-col items-center">
+                              <div className={`w-3 h-3 rounded-full mt-1.5 ${s.status === 'done' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-indigo-400 pulse'}`} />
+                              {i < steps.length - 1 && <div className="w-px h-full bg-slate-800/50 my-1" />}
+                            </div>
+                            <div className="flex-1 pb-6">
+                              <h3 className={`text-xs font-black uppercase tracking-widest ${s.status === 'done' ? 'text-slate-500' : 'text-white'}`}>{s.title}</h3>
+                              <p className="text-[10px] text-slate-600 mt-1.5 leading-relaxed">{s.detail}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right: Agent Status Cards */}
+                    <div className="space-y-4">
+                      <div className="glass-card p-6 flex items-center justify-between border-indigo-500/20 bg-indigo-500/5">
+                        <div>
+                          <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.2em]">Researcher Agent</h4>
+                          <p className="text-[10px] text-slate-500 mt-1 uppercase">Mining ArXiv & Tavily...</p>
+                        </div>
+                        <div className="h-2 w-2 rounded-full bg-indigo-400 pulse" />
+                      </div>
+                      <div className="glass-card p-6 flex items-center justify-between border-slate-800">
+                        <div>
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Logic Critic</h4>
+                          <p className="text-[10px] text-slate-600 mt-1 uppercase">Verification Mode: Active</p>
+                        </div>
+                        <div className={`h-2 w-2 rounded-full ${steps.some(s => s.title.includes('Logic')) ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-slate-800'}`} />
+                      </div>
+                      <div className="glass-card p-6 flex items-center justify-between border-slate-800">
+                        <div>
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Academic Writer</h4>
+                          <p className="text-[10px] text-slate-600 mt-1 uppercase">Standby for synthesis...</p>
+                        </div>
+                        <div className={`h-2 w-2 rounded-full ${steps.some(s => s.title.includes('Writer')) ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-slate-800'}`} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in fade-in duration-500">
+                  <h2 className="text-xl font-black text-white uppercase tracking-tight">Mission Post-Mortem</h2>
+                  {/* Fix #3: Parse grounding array and render cards */}
+                  {(() => {
+                    const grounding = run.summary_json?.grounding;
+                    const cards: any[] = Array.isArray(grounding) ? grounding : [];
+                    const otherEntries = Object.entries(run.summary_json || {}).filter(([k]) => k !== 'grounding');
+                    return (
+                      <>
+                        {otherEntries.length > 0 && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            {otherEntries.map(([k, v]) => (
+                              <div key={k} className="p-4 bg-slate-900/50 rounded-2xl border border-slate-800 flex justify-between items-center">
+                                <span className="text-[10px] font-black text-[#aaabb0] uppercase tracking-[0.15em]">{k.replace(/_/g, ' ')}</span>
+                                <span className="text-xs font-bold text-[#a1faff]">{typeof v === 'object' ? JSON.stringify(v).slice(0, 40) : String(v)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {cards.length > 0 ? (
+                          <div className="space-y-3">
+                            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400">Grounding Cards — RefLens Verification</h3>
+                            {cards.map((card, i) => (
+                              <div key={i} className="p-5 bg-slate-900 rounded-2xl border border-indigo-500/20 hover:border-indigo-500/40 transition-all space-y-3">
+                                <div className="flex items-start gap-3">
+                                  <span className="shrink-0 mt-0.5 w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 text-[9px] font-black flex items-center justify-center">{i+1}</span>
+                                  <p className="text-xs font-bold text-white leading-relaxed">{card.claim}</p>
+                                </div>
+                                {card.verbatim_quote && (
+                                  <blockquote className="ml-8 pl-3 border-l-2 border-indigo-500/40 text-[11px] text-slate-400 italic leading-relaxed">
+                                    "{card.verbatim_quote}"
+                                  </blockquote>
+                                )}
+                                {card.verbatim_quote === 'SPECULATIVE — no direct evidence found.' && (
+                                  <span className="ml-8 text-[9px] font-black uppercase text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">⚠ Speculative</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-20 opacity-40">
+                            <Activity size={40} className="mx-auto mb-4"/>
+                            <p className="italic text-sm">No telemetry history for this mission.</p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+      `}</style>
     </div>
   );
 }

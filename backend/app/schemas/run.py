@@ -11,6 +11,7 @@ class RunCreate(BaseModel):
     topic: str
     vibe: Optional[str] = "Deep Academic"
     commands: Optional[str] = ""
+    execution_enabled: bool = True
 
 
 class RunResponse(BaseModel):
@@ -21,7 +22,7 @@ class RunResponse(BaseModel):
     hypothesis: str
     generated_code: str
     execution_output: str
-    paper_markdown: str
+    paper_json: dict
     summary_json: dict
     error_message: str
     created_at: datetime

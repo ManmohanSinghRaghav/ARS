@@ -93,7 +93,7 @@ if _telemetry_enabled:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routers import runs, settings
+from app.routers import runs, settings, discovery
 from app.routers import auth
 
 settings_obj = get_settings()
@@ -124,6 +124,7 @@ app.add_middleware(
 # ── Routers ──
 app.include_router(runs.router)
 app.include_router(settings.router)
+app.include_router(discovery.router)
 app.include_router(auth.router)
 
 

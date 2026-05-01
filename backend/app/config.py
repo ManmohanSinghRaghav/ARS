@@ -19,14 +19,34 @@ class Settings(BaseSettings):
     # Managed securely via Firebase natively
 
     # ── LLM defaults (overridable per-user via settings API) ──
-    LLM_BACKEND: str = "gemini"
+    # ── LLM API Keys (used for prefix resolution) ──
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.1-flash-lite-preview"  # Default Gemini model
     GROQ_API_KEY: str = ""
-    MLX_MODEL: str = "mlx-community/Qwen2.5-3B-Instruct-bf16"
-    OLLAMA_MODEL: str = "qwen2.5:3b"
+    OPENAI_API_KEY: str = ""
+    CLAUDE_API_KEY: str = ""
+
+    # ── Local / Self-hosted LLM Backends ──
+    LLM_BACKEND: str = "gemini"       # default: gemini | ollama | mlx
+    MLX_MODEL: str = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"  # macOS only
+    OLLAMA_MODEL: str = "llama3"
     OLLAMA_URL: str = "http://localhost:11434"
+    
+    # ── Dynamic Model Categories ──
+    DEFAULT_HEAVY_MODEL: str = "gemini/gemini-3.1-flash-lite-preview"
+    DEFAULT_HEAVY_RPM: int = 15
+    DEFAULT_HEAVY_TPM: int = 30000
+    DEFAULT_HEAVY_FALLBACK_MODEL: str = "gemini/gemini-3.1-flash-lite-preview"
+    DEFAULT_HEAVY_FALLBACK_RPM: int = 15
+    DEFAULT_HEAVY_FALLBACK_TPM: int = 30000
+
+    DEFAULT_LIGHT_MODEL: str = "gemini/gemini-3.1-flash-lite-preview"
+    DEFAULT_LIGHT_RPM: int = 15
+    DEFAULT_LIGHT_TPM: int = 30000
+    DEFAULT_LIGHT_FALLBACK_MODEL: str = "gemini/gemini-3.1-flash-lite-preview"
+    DEFAULT_LIGHT_FALLBACK_RPM: int = 15
+    DEFAULT_LIGHT_FALLBACK_TPM: int = 30000
     TAVILY_API_KEY: str = ""
+    EXECUTION_ENABLED: bool = True
     MODAL_TOKEN_ID: str = ""
     MODAL_TOKEN_SECRET: str = ""
 

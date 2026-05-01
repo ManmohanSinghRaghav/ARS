@@ -33,14 +33,29 @@ def get_user_settings(
     us = _get_or_create_settings(current_user, db)
 
     return SettingsResponse(
-        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
+        llm_backend=us.get("llm_backend") or "gemini",
         gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
-        gemini_model=us.get("gemini_model") or defaults.GEMINI_MODEL or "gemini-3.1-flash-lite-preview",
+        gemini_model=us.get("gemini_model") or "gemini/gemini-2.0-flash",
         groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
-        mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
-        ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,
-        ollama_url=us.get("ollama_url") or defaults.OLLAMA_URL,
+        openai_api_key_set=bool(us.get("openai_api_key") or defaults.OPENAI_API_KEY),
+        claude_api_key_set=bool(us.get("claude_api_key") or defaults.CLAUDE_API_KEY),
+        mlx_model=us.get("mlx_model") or getattr(defaults, "MLX_MODEL", ""),
+        ollama_model=us.get("ollama_model") or getattr(defaults, "OLLAMA_MODEL", "llama3"),
+        ollama_url=us.get("ollama_url") or getattr(defaults, "OLLAMA_URL", "http://localhost:11434"),
         tavily_api_key_set=bool(us.get("tavily_api_key") or defaults.TAVILY_API_KEY),
+        heavy_model=us.get("heavy_model") or defaults.DEFAULT_HEAVY_MODEL,
+        heavy_rpm=us.get("heavy_rpm") or defaults.DEFAULT_HEAVY_RPM,
+        heavy_tpm=us.get("heavy_tpm") or defaults.DEFAULT_HEAVY_TPM,
+        heavy_fallback_model=us.get("heavy_fallback_model") or defaults.DEFAULT_HEAVY_FALLBACK_MODEL,
+        heavy_fallback_rpm=us.get("heavy_fallback_rpm") or defaults.DEFAULT_HEAVY_FALLBACK_RPM,
+        heavy_fallback_tpm=us.get("heavy_fallback_tpm") or defaults.DEFAULT_HEAVY_FALLBACK_TPM,
+        light_model=us.get("light_model") or defaults.DEFAULT_LIGHT_MODEL,
+        light_rpm=us.get("light_rpm") or defaults.DEFAULT_LIGHT_RPM,
+        light_tpm=us.get("light_tpm") or defaults.DEFAULT_LIGHT_TPM,
+        light_fallback_model=us.get("light_fallback_model") or defaults.DEFAULT_LIGHT_FALLBACK_MODEL,
+        light_fallback_rpm=us.get("light_fallback_rpm") or defaults.DEFAULT_LIGHT_FALLBACK_RPM,
+        light_fallback_tpm=us.get("light_fallback_tpm") or defaults.DEFAULT_LIGHT_FALLBACK_TPM,
+        execution_enabled=us.get("execution_enabled") if us.get("execution_enabled") is not None else defaults.EXECUTION_ENABLED,
     )
 
 
@@ -62,18 +77,13 @@ def update_user_settings(
     if payload.gemini_api_key is not None:
         us["gemini_api_key"] = encrypt_str(payload.gemini_api_key)
     if payload.gemini_model is not None:
-        # Validate model choice
-        valid_models = [
-            "gemini-3.1-flash-lite-preview",
-            "gemini-3.1-flash-preview",
-            "gemini-3.1-pro-preview",
-            "gemini-2.0-flash-exp",
-        ]
-        if payload.gemini_model not in valid_models:
-            raise HTTPException(status_code=400, detail=f"gemini_model must be one of: {', '.join(valid_models)}")
         us["gemini_model"] = payload.gemini_model
     if payload.groq_api_key is not None:
         us["groq_api_key"] = encrypt_str(payload.groq_api_key)
+    if payload.openai_api_key is not None:
+        us["openai_api_key"] = encrypt_str(payload.openai_api_key)
+    if payload.claude_api_key is not None:
+        us["claude_api_key"] = encrypt_str(payload.claude_api_key)
     if payload.mlx_model is not None:
         us["mlx_model"] = payload.mlx_model
     if payload.ollama_model is not None:
@@ -82,16 +92,44 @@ def update_user_settings(
         us["ollama_url"] = payload.ollama_url
     if payload.tavily_api_key is not None:
         us["tavily_api_key"] = encrypt_str(payload.tavily_api_key)
+        
+    for field in [
+        "heavy_model", "heavy_rpm", "heavy_tpm", 
+        "heavy_fallback_model", "heavy_fallback_rpm", "heavy_fallback_tpm",
+        "light_model", "light_rpm", "light_tpm", 
+        "light_fallback_model", "light_fallback_rpm", "light_fallback_tpm"
+    ]:
+        val = getattr(payload, field, None)
+        if val is not None:
+            us[field] = val
+            
+    if payload.execution_enabled is not None:
+        us["execution_enabled"] = payload.execution_enabled
 
     doc_ref.set(us, merge=True)
 
     return SettingsResponse(
-        llm_backend=us.get("llm_backend") or defaults.LLM_BACKEND or "gemini",
+        llm_backend=us.get("llm_backend") or "gemini",
         gemini_api_key_set=bool(us.get("gemini_api_key") or defaults.GEMINI_API_KEY),
-        gemini_model=us.get("gemini_model") or defaults.GEMINI_MODEL or "gemini-3.1-flash-lite-preview",
+        gemini_model=us.get("gemini_model") or "gemini/gemini-2.0-flash",
         groq_api_key_set=bool(us.get("groq_api_key") or defaults.GROQ_API_KEY),
-        mlx_model=us.get("mlx_model") or defaults.MLX_MODEL,
-        ollama_model=us.get("ollama_model") or defaults.OLLAMA_MODEL,
-        ollama_url=us.get("ollama_url") or defaults.OLLAMA_URL,
+        openai_api_key_set=bool(us.get("openai_api_key") or defaults.OPENAI_API_KEY),
+        claude_api_key_set=bool(us.get("claude_api_key") or defaults.CLAUDE_API_KEY),
+        mlx_model=us.get("mlx_model") or getattr(defaults, "MLX_MODEL", ""),
+        ollama_model=us.get("ollama_model") or getattr(defaults, "OLLAMA_MODEL", "llama3"),
+        ollama_url=us.get("ollama_url") or getattr(defaults, "OLLAMA_URL", "http://localhost:11434"),
         tavily_api_key_set=bool(us.get("tavily_api_key") or defaults.TAVILY_API_KEY),
+        heavy_model=us.get("heavy_model") or defaults.DEFAULT_HEAVY_MODEL,
+        heavy_rpm=us.get("heavy_rpm") or defaults.DEFAULT_HEAVY_RPM,
+        heavy_tpm=us.get("heavy_tpm") or defaults.DEFAULT_HEAVY_TPM,
+        heavy_fallback_model=us.get("heavy_fallback_model") or defaults.DEFAULT_HEAVY_FALLBACK_MODEL,
+        heavy_fallback_rpm=us.get("heavy_fallback_rpm") or defaults.DEFAULT_HEAVY_FALLBACK_RPM,
+        heavy_fallback_tpm=us.get("heavy_fallback_tpm") or defaults.DEFAULT_HEAVY_FALLBACK_TPM,
+        light_model=us.get("light_model") or defaults.DEFAULT_LIGHT_MODEL,
+        light_rpm=us.get("light_rpm") or defaults.DEFAULT_LIGHT_RPM,
+        light_tpm=us.get("light_tpm") or defaults.DEFAULT_LIGHT_TPM,
+        light_fallback_model=us.get("light_fallback_model") or defaults.DEFAULT_LIGHT_FALLBACK_MODEL,
+        light_fallback_rpm=us.get("light_fallback_rpm") or defaults.DEFAULT_LIGHT_FALLBACK_RPM,
+        light_fallback_tpm=us.get("light_fallback_tpm") or defaults.DEFAULT_LIGHT_FALLBACK_TPM,
+        execution_enabled=us.get("execution_enabled") if us.get("execution_enabled") is not None else defaults.EXECUTION_ENABLED,
     )

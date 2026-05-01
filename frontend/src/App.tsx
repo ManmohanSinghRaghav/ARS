@@ -11,9 +11,9 @@ function App() {
   const { user } = useAuth();
 
   return (
-    <div className={`min-h-screen relative overflow-x-hidden ${user ? "ocean-bg text-[#f6f6fc] font-['Manrope',_sans-serif]" : "bg-gray-50"}`}>
+    <div className={`min-h-screen relative overflow-x-hidden ${user ? "bg-[#0f172a] text-[#f6f6fc] font-['Outfit',_sans-serif]" : "bg-gray-50"}`}>
       {user && <Navbar />}
-      <main className={user ? "ml-32 mr-12 pt-24 pb-12" : ""}>
+      <main className={user ? "pt-24 pb-12" : ""}>
         <Routes>
         <Route
           path="/"

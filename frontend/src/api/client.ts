@@ -47,20 +47,27 @@ export const authAPI = {
 };
 
 export const runsAPI = {
-  create: (topic: string, vibe: string = 'Deep Academic', commands: string = '') => client.post('/runs', { topic, vibe, commands }),
+  create: (topic: string, vibe: string = 'Deep Academic', commands: string = '', execution_enabled: boolean = true) => 
+    client.post('/runs', { topic, vibe, commands, execution_enabled }),
   list: (skip = 0, limit = 20) => client.get(`/runs?skip=${skip}&limit=${limit}`),
   get: (id: string) => client.get(`/runs/${id}`),
   progress: (id: string) => client.get(`/runs/${id}/progress`),
   downloadPaper: (id: string) => client.get(`/runs/${id}/paper`, { responseType: 'text' }),
   downloadPaperPdf: (id: string) => client.get(`/runs/${id}/paper.pdf`, { responseType: 'blob' }),
   delete: (id: string) => client.delete(`/runs/${id}`),
-  updatePaper: (id: string, markdown: string) => client.patch(`/runs/${id}/paper`, { paper_markdown: markdown }),
+  updatePaper: (id: string, json: any, version: number = 0) => client.patch(`/runs/${id}/paper`, { paper_json: json, version }),
   refinePaper: (id: string, feedback: string) => client.post(`/runs/${id}/refine`, { feedback }),
+  chat: (id: string, messages: any[]) => client.post(`/runs/${id}/chat`, { messages }),
 };
 
 export const settingsAPI = {
   get: () => client.get('/settings'),
-  update: (data: Record<string, string | undefined>) => client.put('/settings', data),
+  update: (data: Record<string, string | number | undefined | null>) => client.put('/settings', data),
+};
+
+export const discoveryAPI = {
+  chat: (messages: any[], vibe: string) => client.post('/discovery/chat', { messages, vibe }),
+  suggest: (seed: string, vibe: string) => client.post('/discovery/suggest', { seed, vibe }),
 };
 
 export default client;

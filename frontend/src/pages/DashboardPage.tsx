@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { runsAPI } from '../api/client';
+import { runsAPI, discoveryAPI } from '../api/client';
 import RunCard from '../components/RunCard';
+import { Activity, Loader2, Sparkles, ChevronRight, X, Zap, BookOpen, Swords } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface RunListItem {
@@ -13,262 +14,217 @@ interface RunListItem {
   completed_at: string | null;
 }
 
-interface ProgressStep {
-  step: number;
-  total: number;
+interface TopicSuggestion {
   title: string;
-  status: string;
-  detail: string;
-  timestamp: string;
+  angle: string;
+  vibe: 'Deep Academic' | 'Rapid Synthesis' | 'Adversarial Audit';
 }
 
-const STEP_LABELS: Record<number, string> = {
-  0: 'Initialising',
-  1: 'Searching literature',
-  2: 'Extracting knowledge',
-  3: 'Generating hypothesis',
-  4: 'Checking novelty',
-  5: 'Writing experiment code',
-  6: 'Running experiment',
-  7: 'Reviewing code',
-  8: 'Composing paper',
-  9: 'Final quality check',
-  10: 'Saving paper',
+const VIBE_ICONS: Record<string, JSX.Element> = {
+  'Deep Academic': <BookOpen size={13} />,
+  'Rapid Synthesis': <Zap size={13} />,
+  'Adversarial Audit': <Swords size={13} />,
 };
 
-function StepIcon({ status }: { status: string }) {
-  if (status === 'done') {
-    return (
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500/20 text-green-300 text-sm font-bold">
-        ✓
-      </span>
-    );
-  }
-  if (status === 'running') {
-    return (
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#a1faff]/20 text-[#a1faff]">
-        <span className="block h-3 w-3 animate-spin rounded-full border-2 border-[#a1faff] border-t-transparent" />
-      </span>
-    );
-  }
-  return (
-    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-600/50 text-slate-400 text-xs">
-      ●
-    </span>
-  );
-}
+const VIBE_COLORS: Record<string, string> = {
+  'Deep Academic': 'border-indigo-500/50 bg-indigo-500/10 text-indigo-300',
+  'Rapid Synthesis': 'border-amber-500/50 bg-amber-500/10 text-amber-300',
+  'Adversarial Audit': 'border-red-500/50 bg-red-500/10 text-red-300',
+};
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [topic, setTopic] = useState('');
   const [vibe, setVibe] = useState('Deep Academic');
-  const [commands, setCommands] = useState('');
+  const [execEnabled, setExecEnabled] = useState(true);
   const [running, setRunning] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [steps, setSteps] = useState<ProgressStep[]>([]);
   const [recentRuns, setRecentRuns] = useState<RunListItem[]>([]);
-  const [loadingRuns, setLoadingRuns] = useState(true);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isRefining, setIsRefining] = useState(false);
+  const [suggestions, setSuggestions] = useState<TopicSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
-  useEffect(() => {
-    fetchRuns();
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
+  useEffect(() => { fetchRuns(); }, []);
 
   const fetchRuns = async () => {
     try {
       const res = await runsAPI.list(0, 5);
       setRecentRuns(res.data);
-    } catch {
-      // silently fail for recent runs
-    } finally {
-      setLoadingRuns(false);
-    }
+    } catch { /* silent */ }
   };
 
-  const startPolling = (runId: string) => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await runsAPI.progress(runId);
-        const data = res.data;
-        setSteps(data.steps || []);
-
-        if (data.status === 'completed') {
-          stopPolling();
-          setRunning(false);
-          setActiveRunId(null);
-          toast.success('Research complete!');
-          navigate(`/runs/${runId}`);
-        } else if (data.status === 'failed') {
-          stopPolling();
-          setRunning(false);
-          setActiveRunId(null);
-          toast.error('Pipeline failed');
-          fetchRuns();
-        }
-      } catch {
-        // ignore polling errors
+  const handleSuggest = async () => {
+    if (!topic.trim()) return toast.error('Enter a seed idea first');
+    setIsRefining(true);
+    setSuggestions([]);
+    try {
+      const res = await discoveryAPI.suggest(topic.trim(), vibe);
+      const data = res.data;
+      if (data.suggestions && data.suggestions.length > 0) {
+        setSuggestions(data.suggestions);
+        setShowSuggestions(true);
+      } else {
+        toast.error('No suggestions returned — try a more specific seed');
       }
-    }, 3000);
+    } catch {
+      toast.error('Topic optimizer offline — check backend');
+    } finally {
+      setIsRefining(false);
+    }
   };
 
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+  const applySuggestion = (s: TopicSuggestion) => {
+    setTopic(s.title);
+    setVibe(s.vibe);
+    setShowSuggestions(false);
+    toast.success('Topic & vibe applied!');
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const t = topic.trim();
-    if (!t) {
-      toast.error('Please enter a research topic');
-      return;
-    }
-
+    if (!topic.trim()) return toast.error('Enter a research topic');
     setRunning(true);
-    setSteps([]);
     try {
-      const res = await runsAPI.create(t, vibe, commands.trim());
-      const runId = res.data.id;
-      setActiveRunId(runId);
-      startPolling(runId);
+      const res = await runsAPI.create(topic.trim(), vibe, '', execEnabled);
+      toast.success('Mission Initialized: Swarm Launching');
+      navigate(`/runs/${res.data.id}`);
     } catch (err: any) {
-      const detail = err.response?.data?.detail || 'Pipeline failed to start';
-      toast.error(detail);
+      toast.error(err.response?.data?.detail || 'System fault');
       setRunning(false);
-      fetchRuns();
     }
   };
 
-  // Determine current step index (highest step with status "running" or latest "done")
-  const currentStep = steps.length > 0 ? Math.max(...steps.map((s) => s.step)) : 0;
-
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 text-[#f6f6fc]">
-      {/* New Run Section */}
-      <div className="bg-slate-800/40 rounded-2xl shadow-lg border border-[#a1faff]/20 p-8 mb-8">
-        <h1 className="text-2xl font-bold text-[#f6f6fc] mb-2">Start New Research</h1>
-        <p className="text-[#aaabb0] mb-6">
-          Enter a research topic, constraints, and vibe. The intent architect will verify claims using a multi-agent swarm.
-        </p>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div>
-            <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Research Topic</label>
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g., Explain sparse attention mechanisms in LLMs"
-              className="w-full px-4 py-3 border border-[#a1faff]/30 rounded-lg bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0] focus:ring-2 focus:ring-[#a1faff] focus:border-[#a1faff] outline-none transition-all"
-              disabled={running}
-            />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Agent Vibe</label>
-              <select
-                value={vibe}
-                onChange={(e) => setVibe(e.target.value)}
+    <div className="min-h-screen bg-[#0f172a] text-slate-50 p-6 lg:p-12">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+        {/* Left Column: Command Center */}
+        <div className="lg:col-span-7 space-y-8">
+          <div className="glass-card p-8 space-y-6">
+            <header>
+              <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+                ARS Command Center
+              </h1>
+              <p className="text-slate-400 mt-2">Initialize autonomous research swarms with multi-agent consensus.</p>
+            </header>
+
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {/* Topic Input */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-500">Research Topic</label>
+                  <button
+                    type="button"
+                    onClick={handleSuggest}
+                    disabled={isRefining || running}
+                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300 transition-all disabled:opacity-40"
+                  >
+                    {isRefining
+                      ? <><Loader2 size={11} className="animate-spin" /> Generating...</>
+                      : <><Sparkles size={11} /> Optimize Topic</>
+                    }
+                  </button>
+                </div>
+                <textarea
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  className="input-glass text-base resize-none"
+                  rows={3}
+                  placeholder="Define your research intent... (e.g. 'Effect of sleep on cognitive function')"
+                  disabled={running}
+                />
+              </div>
+
+              {/* AI Suggestions Modal */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="relative rounded-2xl border border-[#a1faff]/20 bg-slate-900/80 backdrop-blur-xl overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={13} className="text-[#a1faff]" />
+                      <span className="text-[10px] font-black uppercase tracking-widest text-[#a1faff]">
+                        AI Suggestions — Pick One
+                      </span>
+                    </div>
+                    <button type="button" onClick={() => setShowSuggestions(false)} className="text-slate-500 hover:text-slate-300 transition-all">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {suggestions.map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => applySuggestion(s)}
+                        className="w-full text-left p-3 rounded-xl border border-white/5 bg-slate-800/50 hover:bg-slate-700/50 hover:border-[#a1faff]/30 transition-all group"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-white leading-snug group-hover:text-[#a1faff] transition-colors">
+                              {s.title}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{s.angle}</p>
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            <span className={`flex items-center gap-1 text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${VIBE_COLORS[s.vibe] || 'border-slate-700 text-slate-400'}`}>
+                              {VIBE_ICONS[s.vibe]} {s.vibe}
+                            </span>
+                            <ChevronRight size={14} className="text-slate-600 group-hover:text-[#a1faff] transition-colors" />
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Mode + Vibe */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-500">Simulation Mode</label>
+                  <div
+                    onClick={() => !running && setExecEnabled(!execEnabled)}
+                    className={`flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-all ${execEnabled ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-slate-700 bg-slate-800/50'}`}
+                  >
+                    <span className="text-sm font-medium">{execEnabled ? 'Live Sandbox' : 'Theoretical'}</span>
+                    <div className={`w-10 h-5 rounded-full relative transition-colors ${execEnabled ? 'bg-indigo-500' : 'bg-slate-600'}`}>
+                      <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${execEnabled ? 'right-1' : 'left-1'}`} />
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-500">Cognitive Vibe</label>
+                  <select
+                    value={vibe}
+                    onChange={(e) => setVibe(e.target.value)}
+                    className="input-glass bg-slate-800/50"
+                    disabled={running}
+                  >
+                    <option>Deep Academic</option>
+                    <option>Adversarial Audit</option>
+                    <option>Rapid Synthesis</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
                 disabled={running}
-                className="w-full px-4 py-3 bg-slate-700/50 text-[#f6f6fc] border border-[#a1faff]/30 rounded-lg focus:ring-2 focus:ring-[#a1faff] outline-none"
+                className="btn-primary w-full text-lg py-4 flex items-center justify-center gap-3"
               >
-                <option value="Deep Academic">Deep Academic</option>
-                <option value="Fast-Paced Prototype">Fast-Paced Prototype</option>
-                <option value="Adversarial Audit">Adversarial Audit</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[#f6f6fc] mb-1">Input Commands / Constraints</label>
-              <input
-                type="text"
-                value={commands}
-                onChange={(e) => setCommands(e.target.value)}
-                placeholder="e.g., Focus only on causal modeling limits"
-                className="w-full px-4 py-3 border border-[#a1faff]/30 rounded-lg bg-slate-700/50 text-[#f6f6fc] placeholder-[#aaabb0] focus:ring-2 focus:ring-[#a1faff] outline-none"
-                disabled={running}
-              />
-            </div>
+                {running ? (
+                  <>
+                    <span className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Swarm Initializing...
+                  </>
+                ) : 'Launch Autonomous Swarm'}
+              </button>
+            </form>
           </div>
-          <button
-            type="submit"
-            disabled={running}
-            className="mt-2 w-full py-3 bg-[#a1faff]/20 text-[#a1faff] rounded-lg font-medium hover:bg-[#a1faff]/30 disabled:opacity-50 transition-colors"
-          >
-            {running ? 'Swarm Initializing...' : 'Initialize Mission'}
-          </button>
-        </form>
-      </div>
-
-      {/* Pipeline Progress */}
-      {running && activeRunId && (
-        <div className="bg-slate-800/40 rounded-2xl shadow-lg border border-[#a1faff]/20 p-8 mb-8">
-          <h2 className="text-lg font-semibold text-[#f6f6fc] mb-1">Pipeline Progress</h2>
-          <p className="text-sm text-[#aaabb0] mb-6">
-            Run #{activeRunId} — This typically takes 5–30 minutes
-          </p>
-
-          {/* Progress bar */}
-          <div className="w-full bg-slate-700/50 rounded-full h-2 mb-6 border border-[#a1faff]/20">
-            <div
-              className="bg-gradient-to-r from-[#a1faff] to-[#00f4fe] h-2 rounded-full transition-all duration-500"
-              style={{ width: `${(currentStep / 10) * 100}%` }}
-            />
-          </div>
-
-          {/* Step list */}
-          <ol className="space-y-3">
-            {Array.from({ length: 10 }, (_, i) => i + 1).map((stepNum) => {
-              const stepData = [...steps].reverse().find((s) => s.step === stepNum);
-              const status = stepData?.status || 'pending';
-              const label = stepData?.title || STEP_LABELS[stepNum] || `Step ${stepNum}`;
-              const detail = stepData?.detail || '';
-              const isActive = status === 'running';
-
-              return (
-                <li
-                  key={stepNum}
-                  className={`flex items-center gap-3 ${
-                    status === 'pending' ? 'opacity-40' : ''
-                  } ${isActive ? 'font-medium' : ''}`}
-                >
-                  <StepIcon status={status} />
-                  <span className="text-[#f6f6fc] text-sm">
-                    {stepNum}. {label}
-                  </span>
-                  {detail && (
-                    <span className="text-xs text-[#aaabb0] ml-auto">{detail}</span>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
         </div>
-      )}
 
-      {/* Recent Runs */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-[#f6f6fc]">Recent Runs</h2>
-          {recentRuns.length > 0 && (
-            <a href="/history" className="text-sm text-[#a1faff] hover:text-[#00f4fe] transition-colors">
-              View all
-            </a>
-          )}
-        </div>
-        {loadingRuns ? (
-          <div className="text-center py-8 text-[#aaabb0]">Loading...</div>
-        ) : recentRuns.length === 0 ? (
-          <div className="text-center py-12 text-[#aaabb0]">
-            <p className="text-lg mb-1">No research runs yet</p>
-            <p className="text-sm">Start your first run above!</p>
-          </div>
-        ) : (
-          <div className="grid gap-3">
+        {/* Right Column: Mission Logs */}
+        <div className="lg:col-span-5 space-y-6">
+          <h2 className="text-lg font-bold text-slate-300">Mission History</h2>
+          <div className="space-y-4 max-h-[calc(100vh-200px)] overflow-y-auto pr-2 custom-scrollbar">
             {recentRuns.map((run) => (
               <RunCard
                 key={run.id}
@@ -277,11 +233,16 @@ export default function DashboardPage() {
                 status={run.status}
                 paperWordCount={run.paper_word_count}
                 createdAt={run.created_at}
-                completedAt={run.completed_at}
               />
             ))}
+            {recentRuns.length === 0 && (
+              <div className="p-8 text-center glass-card border-dashed border-slate-700">
+                <Activity size={24} className="text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-500 text-sm italic">No missions logged in history.</p>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

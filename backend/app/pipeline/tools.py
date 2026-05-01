@@ -9,7 +9,7 @@ from crewai.tools import tool
 from typing import List
 
 from app.config import get_settings
-from app.pipeline.runtime_context import get_tavily_api_key, get_run_id
+from app.pipeline.runtime_context import get_tavily_api_key, get_run_id, get_llm_config
 from app.pipeline.rag import retrieve_grounding_spans, index_grounding_spans
 from app.pipeline.llm_factory import get_tier_llm
 
@@ -40,15 +40,29 @@ def _set_cache(key: str, val: str):
             pass
 
 
-def _truncate_doc(text: str, max_chars: int = 2500) -> str:
-    if len(text) <= max_chars:
+def _get_safe_max_chars(default_limit: int = 2500) -> int:
+    """Calculate a safe character limit based on the current run's TPM."""
+    cfg = get_llm_config()
+    # Assume 'light' tier for most tools (Researcher)
+    tpm = cfg.get("light_tpm") or cfg.get("heavy_tpm") or 30000
+    
+    # Breathing space: limit a single doc to ~5-10% of the minute's token budget
+    # 1 token ~= 4 chars. Safe limit = (tpm * 4) * 0.08
+    safe_limit = int((tpm * 4) * 0.08)
+    return min(default_limit, safe_limit) if safe_limit > 500 else max(500, safe_limit)
+
+
+def _truncate_doc(text: str, max_chars: int | None = None) -> str:
+    limit = max_chars if max_chars is not None else _get_safe_max_chars()
+    if len(text) <= limit:
         return text
-    return text[:max_chars].rstrip() + "\n\n[TRUNCATED: remaining content omitted to fit token limit]"
+    return text[:limit].rstrip() + f"\n\n[TRUNCATED: content reduced to {limit} chars for stability]"
 
 
 def _summarize_batch(existing_summary: str | None, docs: List[str], topic: str) -> str:
     if existing_summary:
-        existing_summary = _truncate_doc(existing_summary, max_chars=1600)
+        limit = _get_safe_max_chars(default_limit=1600)
+        existing_summary = _truncate_doc(existing_summary, max_chars=limit)
 
     prompt_parts = []
     if existing_summary:
@@ -153,12 +167,18 @@ def search_literature(topic: str) -> str:
                 print(f"[RAG] Warning: Auto-index failed: {e}")
 
         summary = None
-        for i in range(0, len(docs), 2):
-            batch = docs[i:i + 2]
+        # Dynamic Batching: if TPM is low, process 1 doc at a time instead of 2
+        cfg = get_llm_config()
+        tpm = cfg.get("light_tpm") or 30000
+        batch_size = 2 if tpm >= 30000 else 1
+        
+        for i in range(0, len(docs), batch_size):
+            batch = docs[i:i + batch_size]
             summary = _summarize_batch(summary, batch, topic)
             
         result_str = summary or "No external sources generated. Rely on internal model knowledge."
-        result_str = _truncate_doc(result_str, max_chars=3200)
+        final_limit = _get_safe_max_chars(default_limit=3200)
+        result_str = _truncate_doc(result_str, max_chars=final_limit)
         
         # Cache both the original docs (spans_to_index) and the summary
         try:

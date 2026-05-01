@@ -14,7 +14,7 @@ _lock = threading.Lock()
 
 
 def add_step(run_id: str, step: int, total: int, title: str,
-             status: str = "running", detail: str = ""):
+             status: str = "running", detail: str = "", output: str = "", is_internal: bool = False):
     """Append a progress event for a run."""
     entry = {
         "step": step,
@@ -22,6 +22,8 @@ def add_step(run_id: str, step: int, total: int, title: str,
         "title": title,
         "status": status,       # running | success | warning | error
         "detail": detail,
+        "output": output,
+        "is_internal": is_internal,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     with _lock:
@@ -37,6 +39,15 @@ def add_step(run_id: str, step: int, total: int, title: str,
     except Exception as e:
         # Never break a run due to progress persistence failure.
         print(f"[Progress] Warning: failed to persist progress for run {run_id}: {e}")
+
+    # Best-effort semantic indexing for mission-log search (ChromaDB).
+    try:
+        from app.pipeline.rag import index_mission_log
+
+        index_mission_log(run_id=run_id, entry=entry)
+    except Exception as e:
+        # Never break a run due to indexing failures.
+        print(f"[Progress] Warning: failed to index mission log for run {run_id}: {e}")
 
 
 def get_steps(run_id: str) -> list[dict]:
@@ -62,6 +73,12 @@ def get_steps(run_id: str) -> list[dict]:
     except Exception as e:
         print(f"[Progress] Warning: failed to load persisted progress for run {run_id}: {e}")
         return []
+
+
+def get_completed_tasks(run_id: str) -> dict[int, str]:
+    """Return a map of {step_number: output} for tasks that finished successfully."""
+    steps = get_steps(run_id)
+    return {s["step"]: s["output"] for s in steps if s.get("status") == "done" and s.get("output")}
 
 
 def clear(run_id: str):

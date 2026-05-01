@@ -3,6 +3,7 @@ Research runs router — start, list, view, download, delete, progress.
 Uses Firestore instead of SQLAlchemy.
 """
 
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse, Response
 from typing import List
@@ -28,21 +29,36 @@ def _get_user_llm_config(user: User, db) -> tuple[dict, str]:
         try:
             return decrypt_str(us.get(field))
         except Exception as e:
-            # If decryption fails, treat as unset so runs don't crash unexpectedly.
             print(f"[Runs] Warning: failed to decrypt setting '{field}' for user {user.id}: {e}")
             return ""
 
     llm_config = {
-        "llm_backend": (us.get("llm_backend") if us.get("llm_backend") else "") or settings.LLM_BACKEND,
         "gemini_api_key": (_dec("gemini_api_key") if us.get("gemini_api_key") else "") or settings.GEMINI_API_KEY,
         "groq_api_key": (_dec("groq_api_key") if us.get("groq_api_key") else "") or settings.GROQ_API_KEY,
-        "mlx_model": (us.get("mlx_model") if us.get("mlx_model") else "") or settings.MLX_MODEL,
-        "ollama_model": (us.get("ollama_model") if us.get("ollama_model") else "") or settings.OLLAMA_MODEL,
-        "ollama_url": (us.get("ollama_url") if us.get("ollama_url") else "") or settings.OLLAMA_URL,
+        "openai_api_key": (_dec("openai_api_key") if us.get("openai_api_key") else "") or settings.OPENAI_API_KEY,
+        "claude_api_key": (_dec("claude_api_key") if us.get("claude_api_key") else "") or settings.CLAUDE_API_KEY,
+        "ollama_model": us.get("ollama_model") or settings.OLLAMA_MODEL,
+        "ollama_url": us.get("ollama_url") or settings.OLLAMA_URL,
+        # Dynamic model tiers
+        "heavy_model": us.get("heavy_model") or settings.DEFAULT_HEAVY_MODEL,
+        "heavy_rpm": us.get("heavy_rpm") or settings.DEFAULT_HEAVY_RPM,
+        "heavy_tpm": us.get("heavy_tpm") or settings.DEFAULT_HEAVY_TPM,
+        "heavy_fallback_model": us.get("heavy_fallback_model") or settings.DEFAULT_HEAVY_FALLBACK_MODEL,
+        "heavy_fallback_rpm": us.get("heavy_fallback_rpm") or settings.DEFAULT_HEAVY_FALLBACK_RPM,
+        "heavy_fallback_tpm": us.get("heavy_fallback_tpm") or settings.DEFAULT_HEAVY_FALLBACK_TPM,
+        "light_model": us.get("light_model") or settings.DEFAULT_LIGHT_MODEL,
+        "light_rpm": us.get("light_rpm") or settings.DEFAULT_LIGHT_RPM,
+        "light_tpm": us.get("light_tpm") or settings.DEFAULT_LIGHT_TPM,
+        "light_fallback_model": us.get("light_fallback_model") or settings.DEFAULT_LIGHT_FALLBACK_MODEL,
+        "light_fallback_rpm": us.get("light_fallback_rpm") or settings.DEFAULT_LIGHT_FALLBACK_RPM,
+        "light_fallback_tpm": us.get("light_fallback_tpm") or settings.DEFAULT_LIGHT_FALLBACK_TPM,
+        "execution_enabled": us.get("execution_enabled", settings.EXECUTION_ENABLED),
+        "vibe": us.get("vibe", "Deep Academic"),
     }
     tavily_key = (_dec("tavily_api_key") if us.get("tavily_api_key") else "") or settings.TAVILY_API_KEY
 
     return llm_config, tavily_key
+
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
@@ -62,6 +78,9 @@ def start_run(
         llm_config["vibe"] = payload.vibe
     if payload.commands:
         llm_config["commands"] = payload.commands
+    
+    # NEW: Manual Execution Toggle from UI
+    llm_config["execution_enabled"] = payload.execution_enabled
 
     run_data = run_pipeline(
         topic=payload.topic.strip(),
@@ -115,7 +134,9 @@ def list_runs(
     result = []
     for doc in docs:
         r = doc.to_dict()
-        word_count = len(r.get("paper_markdown", "").split()) if r.get("paper_markdown") else 0
+        paper_json = r.get("paper_json", {})
+        sections = paper_json.get("sections", []) if isinstance(paper_json, dict) else []
+        word_count = sum(len(str(s.get("content") or "").split()) for s in sections if isinstance(s, dict))
         result.append({
             "id": r.get("id"),
             "topic": r.get("topic"),
@@ -199,8 +220,8 @@ def download_paper(
 
     return PlainTextResponse(
         content=content,
-        media_type="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.txt"'},
+        media_type="text/x-tex",
+        headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.tex"'},
     )
 
 
@@ -242,18 +263,22 @@ def download_paper_pdf(
             except Exception:
                 pass
 
-    # 2. Try Local outputs
-    pdf_local = os.path.join(settings.OUTPUTS_DIR, f"paper_{run_id}.pdf")
-    if os.path.exists(pdf_local):
-        with open(pdf_local, "rb") as f:
-            pdf_bytes = f.read()
+    # 2. Try Generating from JSON (Pro Engine)
+    run = doc.to_dict()
+    paper_json = run.get("paper_json")
+    if paper_json:
+        from app.pipeline.pro_pdf import generate_pro_pdf
+        try:
+            pdf_bytes = generate_pro_pdf(paper_json)
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
                 headers={"Content-Disposition": f'attachment; filename="paper_{run_id}.pdf"'},
             )
+        except Exception as e:
+            print(f"[Runs] Error generating Pro PDF: {e}")
 
-    raise HTTPException(status_code=404, detail="Compiled PDF not found for this run.")
+    raise HTTPException(status_code=404, detail="Paper content not found for PDF generation.")
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -283,7 +308,7 @@ def delete_run(
         from app.database import get_storage_bucket
         bucket = get_storage_bucket()
         if bucket:
-            # Delete paper.md and paper.pdf if they exist
+            # Delete paper.tex and paper.pdf if they exist
             blobs = bucket.list_blobs(prefix=f"runs/{run_id}/")
             for blob in blobs:
                 blob.delete()
@@ -319,34 +344,51 @@ def update_paper(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """Manually update the paper markdown for a run."""
+    """Manually update the paper JSON for a run."""
     doc_ref = db.collection("runs").document(run_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Run not found")
-    
-    run = doc.to_dict()
+
+    run = doc.to_dict()  # ← was missing, causing NameError
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
-    
-    new_content = payload.get("paper_markdown")
-    if not new_content:
-        raise HTTPException(status_code=400, detail="paper_markdown is required")
+
+    current_version = run.get("version", 0)
+    client_version = payload.get("version", 0)
+
+    # ── Check Version Conflict ──
+    if client_version < current_version:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Version conflict detected.", "current_version": current_version, "paper_json": run.get("paper_json")}
+        )
+
+    new_version = current_version + 1
+    new_json = payload.get("paper_json")
+    if not new_json:
+        raise HTTPException(status_code=400, detail="paper_json is required")
 
     # Update Firestore
-    doc_ref.update({"paper_markdown": new_content})
-    
-    # Update Storage if available
-    from app.config import get_settings
-    from app.database import get_storage_bucket
-    settings = get_settings()
-    if settings.FIREBASE_STORAGE_BUCKET:
-        bucket = get_storage_bucket()
-        if bucket:
-            blob = bucket.blob(f"runs/{run_id}/paper.md")
-            blob.upload_from_string(new_content, content_type="text/markdown")
+    doc_ref.update({
+        "paper_json": new_json,
+        "version": new_version
+    })
 
-    return {"status": "success", "message": "Paper updated manually"}
+    # Update Storage if available (graceful — bucket may not exist)
+    try:
+        from app.config import get_settings
+        from app.database import get_storage_bucket
+        settings = get_settings()
+        if settings.FIREBASE_STORAGE_BUCKET:
+            bucket = get_storage_bucket()
+            if bucket:
+                blob = bucket.blob(f"runs/{run_id}/paper.json")
+                blob.upload_from_string(json.dumps(new_json), content_type="application/json")
+    except Exception as e:
+        print(f"[Runs] Warning: Storage upload failed (non-fatal): {e}")
+
+    return {"status": "success", "message": "Paper JSON updated", "version": new_version}
 
 @router.post("/{run_id}/refine")
 def start_refinement(
@@ -379,3 +421,146 @@ def start_refinement(
         llm_config=llm_config
     )
     return res
+
+@router.post("/{run_id}/chat")
+async def run_grounded_chat(
+    run_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Chat with a specific paper using its content as context."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    llm_config, _ = _get_user_llm_config(current_user, db)
+    messages = payload.get("messages", [])
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages are required")
+
+    # Use reasoning engine to detect if this is a question or an edit command
+    from app.pipeline.llm_factory import get_tier_llm
+    llm = get_tier_llm("reasoning", llm_config)  # Fix #4: pass llm_config
+    
+    last_message = messages[-1]['content']
+    intent_prompt = f"""Analyze the user's message: "{last_message}"
+    Is the user asking for a CHANGE, EDIT, or UPDATE to the research paper content? 
+    Reply with ONLY 'EDIT' or 'QUESTION'.
+    """
+    intent = llm.call(intent_prompt).strip().upper()
+
+    if 'EDIT' in intent:
+        # Trigger refinement in background
+        refine_pipeline(
+            run_id=run_id,
+            feedback=last_message,
+            user_id=current_user.id,
+            db=db,
+            llm_config=llm_config
+        )
+        return {
+            "content": "I've detected an edit request. I am now re-engaging the Swarm to refine the manuscript based on your feedback. Please monitor the Live PDF for updates.",
+            "action_triggered": "refining"
+        }
+
+    # Otherwise, proceed with normal grounded QA
+    paper_json = run.get("paper_json", {})
+    paper_content = json.dumps(paper_json, indent=2)
+    history = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+    
+    system_prompt = f"You are the ARS Research Assistant. Answer questions about the following research paper. Use ONLY the provided context.\n\nPaper Content:\n{paper_content[:20000]}"
+    full_prompt = f"{system_prompt}\n\nHistory:\n{history}\n\nASSISTANT:"
+    
+    try:
+        response = llm.call(full_prompt)
+        return {"content": response.strip(), "action_triggered": "chat"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Grounded chat failed: {e}")
+
+
+@router.patch("/{run_id}/paper/sections/{section_id}")
+def update_section(
+    run_id: str,
+    section_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """CRUD: Update a specific section in paper_json by section id."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    paper_json = run.get("paper_json", {})
+    sections = paper_json.get("sections", [])
+    updated = False
+    for i, s in enumerate(sections):
+        if s.get("id") == section_id:
+            sections[i] = {**s, **payload}
+            updated = True
+            break
+    if not updated:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    paper_json["sections"] = sections
+    new_version = run.get("version", 0) + 1
+    doc_ref.update({"paper_json": paper_json, "version": new_version})
+    return {"status": "ok", "version": new_version}
+
+
+@router.post("/{run_id}/paper/sections")
+def add_section(
+    run_id: str,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """CRUD: Append a new section to paper_json."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    paper_json = run.get("paper_json", {})
+    sections = paper_json.get("sections", [])
+    sections.append(payload)
+    paper_json["sections"] = sections
+    new_version = run.get("version", 0) + 1
+    doc_ref.update({"paper_json": paper_json, "version": new_version})
+    return {"status": "ok", "version": new_version}
+
+
+@router.delete("/{run_id}/paper/sections/{section_id}", status_code=204)
+def delete_section(
+    run_id: str,
+    section_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """CRUD: Delete a section from paper_json by id."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    paper_json = run.get("paper_json", {})
+    sections = [s for s in paper_json.get("sections", []) if s.get("id") != section_id]
+    paper_json["sections"] = sections
+    new_version = run.get("version", 0) + 1
+    doc_ref.update({"paper_json": paper_json, "version": new_version})
