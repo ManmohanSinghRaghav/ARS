@@ -32,8 +32,8 @@ def get_run_id() -> str:
 
 
 def set_llm_config(value: Optional[dict]) -> None:
-    _llm_config.set(value or {})
+    _llm_config.set(dict(value) if value else {})
 
 
 def get_llm_config() -> dict:
-    return _llm_config.get()
+    return dict(_llm_config.get())

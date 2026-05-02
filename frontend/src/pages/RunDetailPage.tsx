@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PDFViewer, pdf } from '@react-pdf/renderer';
-import { Sparkles, Download, MessageSquare, Send, Plus, Trash2, Loader2, FileText, Code2, Activity, Image as ImageIcon, Type, RefreshCw, Pencil, Check } from 'lucide-react';
+import { Sparkles, Download, MessageSquare, Send, Plus, Trash2, Loader2, FileText, Code2, Activity, Image as ImageIcon, Type, RefreshCw, Pencil, Check, MoveUp, MoveDown, Copy, Wand2, BookOpen, Lightbulb, Edit3, ChevronRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -33,6 +33,9 @@ const EMPTY_PAPER: PaperJson = {
   metadata: { title: 'New Paper', author: 'ARS', date: new Date().getFullYear().toString(), institution: 'GLA Research Lab' },
   sections: []
 };
+
+/** Run progress API statuses that should stop the pipeline poller */
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'cancelled']);
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -92,9 +95,12 @@ export default function RunDetailPage() {
       try {
         const res = await runsAPI.progress(runId);
         setSteps(res.data.steps || []);
-        if (res.data.status === 'completed') {
+        if (TERMINAL_RUN_STATUSES.has(res.data.status)) {
           clearInterval(pollRef.current!);
-          loadRun(); // Reload final data
+          pollRef.current = null;
+          if (res.data.status === 'completed') {
+            loadRun(); // Reload final data
+          }
         }
       } catch { /* silent */ }
     }, 3000);
@@ -188,6 +194,104 @@ export default function RunDetailPage() {
     setPaperData(next);
     setIsDirty(true);
     syncPaper(next, version);
+  };
+
+  const moveSection = (blockId: string, direction: 'up' | 'down') => {
+    const index = paperData.sections.findIndex(s => s.id === blockId);
+    if (index === -1) return;
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= paperData.sections.length) return;
+    const next = { ...paperData, sections: [...paperData.sections] };
+    [next.sections[index], next.sections[newIndex]] = [next.sections[newIndex], next.sections[index]];
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const duplicateSection = (blockId: string) => {
+    const index = paperData.sections.findIndex(s => s.id === blockId);
+    if (index === -1) return;
+    const section = paperData.sections[index];
+    const newSection = {
+      ...section,
+      id: `sec_${Date.now()}`,
+      title: `${section.title} (Copy)`
+    };
+    const next = { ...paperData, sections: [...paperData.sections] };
+    next.sections.splice(index + 1, 0, newSection);
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const addSectionWithTemplate = (templateType: string) => {
+    const templates: Record<string, { title: string; content: string; type: string }> = {
+      abstract: {
+        title: 'Abstract',
+        type: 'abstract',
+        content: 'This paper presents a novel approach to '
+      },
+      introduction: {
+        title: 'Introduction',
+        type: 'content',
+        content: '## Background\n\nThe field of study has seen significant developments in recent years...\n\n## Problem Statement\n\nDespite these advances, several key challenges remain...\n\n## Contributions\n\nThis work makes the following contributions:\n1. \n2. \n3. '
+      },
+      related_work: {
+        title: 'Related Work',
+        type: 'content',
+        content: 'Previous research in this area has focused on several key directions...\n\nRecent advances have shown promising results in...\n\nHowever, these approaches have limitations including...'
+      },
+      methodology: {
+        title: 'Methodology',
+        type: 'content',
+        content: '## Proposed Approach\n\nWe propose a novel framework that addresses the limitations of existing methods...\n\n## Technical Details\n\nThe core components of our approach include...\n\n## Algorithm\n\nThe proposed algorithm proceeds as follows...'
+      },
+      experiments: {
+        title: 'Experiments',
+        type: 'content',
+        content: '## Experimental Setup\n\nWe evaluate our method on several benchmark datasets...\n\n## Baselines\n\nWe compare against the following state-of-the-art methods...\n\n## Metrics\n\nPerformance is measured using standard evaluation metrics...'
+      },
+      results: {
+        title: 'Results and Discussion',
+        type: 'content',
+        content: '## Main Results\n\nOur experimental results demonstrate significant improvements over existing methods...\n\n## Analysis\n\nThe improvements can be attributed to several factors...\n\n## Limitations\n\nWhile our approach shows promising results, several limitations should be noted...'
+      },
+      conclusion: {
+        title: 'Conclusion',
+        type: 'content',
+        content: '## Summary\n\nIn this work, we have presented a novel approach to...\n\n## Future Work\n\nSeveral directions for future research include...\n\n## Impact\n\nThis research has potential implications for...'
+      },
+      references: {
+        title: 'References',
+        type: 'content',
+        content: '1. Author, A. et al. "Title of the paper." Journal Name, Year.\n2. Author, B. et al. "Another relevant work." Conference Name, Year.'
+      }
+    };
+
+    const template = templates[templateType];
+    if (!template) return;
+
+    const next = {
+      ...paperData,
+      sections: [...paperData.sections, {
+        id: `sec_${Date.now()}`,
+        type: template.type,
+        title: template.title,
+        content: template.content
+      }]
+    };
+    setPaperData(next);
+    setIsDirty(true);
+    syncPaper(next, version);
+  };
+
+  const getWordCount = (text: string): number => {
+    if (!text || !text.trim()) return 0;
+    return text.trim().split(/\s+/).length;
+  };
+
+  const getTotalWordCount = (): number => {
+    return paperData.sections.reduce((sum, s) => sum + getWordCount(s.content), 0);
   };
 
   const aiRefineBlock = async (blockId: string) => {
@@ -368,11 +472,44 @@ export default function RunDetailPage() {
             {/* Left: Block Editor */}
             <div className="w-[42%] min-w-[320px] border-r border-white/5 flex flex-col overflow-hidden bg-slate-950">
               <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/60 border-b border-white/5">
-                <span className="text-[9px] font-black uppercase tracking-[0.25em] text-[#aaabb0]">Structural Blocks</span>
-                <button onClick={addSection} className="flex items-center gap-1 text-[#a1faff] hover:scale-110 transition-all p-1 rounded-lg hover:bg-[#a1faff]/10">
-                  <Plus size={14}/>
-                  <span className="text-[9px] font-black uppercase">Add</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-black uppercase tracking-[0.25em] text-[#aaabb0]">Structural Blocks</span>
+                  <span className="text-[8px] text-slate-600 font-mono">{paperData.sections.length} sections • {getTotalWordCount()} words</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {/* Template Quick-Add Dropdown */}
+                  <div className="relative group">
+                    <button className="flex items-center gap-1 text-[#aaabb0] hover:text-[#a1faff] transition-all p-1 rounded-lg hover:bg-slate-800">
+                      <BookOpen size={14}/>
+                      <span className="text-[9px] font-black uppercase">Template</span>
+                    </button>
+                    <div className="absolute right-0 top-full mt-1 z-50 hidden group-hover:block w-44 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl">
+                      <div className="p-1">
+                        {[
+                          { key: 'abstract', label: 'Abstract', icon: <FileText size={12}/> },
+                          { key: 'introduction', label: 'Introduction', icon: <Lightbulb size={12}/> },
+                          { key: 'related_work', label: 'Related Work', icon: <BookOpen size={12}/> },
+                          { key: 'methodology', label: 'Methodology', icon: <Wand2 size={12}/> },
+                          { key: 'experiments', label: 'Experiments', icon: <Activity size={12}/> },
+                          { key: 'results', label: 'Results', icon: <ChevronRight size={12}/> },
+                          { key: 'conclusion', label: 'Conclusion', icon: <Check size={12}/> },
+                        ].map(t => (
+                          <button
+                            key={t.key}
+                            onClick={() => addSectionWithTemplate(t.key)}
+                            className="flex items-center gap-2 w-full px-2 py-1.5 text-[9px] font-bold text-slate-300 hover:bg-indigo-500/20 hover:text-indigo-400 rounded transition-all"
+                          >
+                            {t.icon} {t.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={addSection} className="flex items-center gap-1 text-[#a1faff] hover:scale-110 transition-all p-1 rounded-lg hover:bg-[#a1faff]/10">
+                    <Plus size={14}/>
+                    <span className="text-[9px] font-black uppercase">Add</span>
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
                 {/* Metadata Block */}
@@ -409,7 +546,23 @@ export default function RunDetailPage() {
                           }}
                           className="text-[10px] font-black text-white uppercase tracking-widest bg-transparent border-none outline-none w-full"/>
                       </div>
-                      <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        {/* Move Up */}
+                        <button onClick={e => { e.stopPropagation(); moveSection(section.id, 'up'); }}
+                          className="p-1 hover:bg-slate-700 rounded-lg transition-all" title="Move Up">
+                          <MoveUp size={12} className="text-slate-400 hover:text-white"/>
+                        </button>
+                        {/* Move Down */}
+                        <button onClick={e => { e.stopPropagation(); moveSection(section.id, 'down'); }}
+                          className="p-1 hover:bg-slate-700 rounded-lg transition-all" title="Move Down">
+                          <MoveDown size={12} className="text-slate-400 hover:text-white"/>
+                        </button>
+                        {/* Duplicate */}
+                        <button onClick={e => { e.stopPropagation(); duplicateSection(section.id); }}
+                          className="p-1 hover:bg-slate-700 rounded-lg transition-all" title="Duplicate">
+                          <Copy size={12} className="text-slate-400 hover:text-white"/>
+                        </button>
+                        {/* Type Selector */}
                         <select 
                           value={section.type}
                           onClick={e => e.stopPropagation()}
@@ -417,16 +570,18 @@ export default function RunDetailPage() {
                             const next = { ...paperData, sections: paperData.sections.map(s => s.id === section.id ? { ...s, type: e.target.value } : s) };
                             setPaperData(next); setIsDirty(true); syncPaper(next, version);
                           }}
-                          className="bg-slate-800 text-[8px] font-bold text-slate-400 uppercase tracking-widest rounded px-1.5 py-0.5 border-none outline-none"
+                          className="bg-slate-800 text-[8px] font-bold text-slate-400 uppercase tracking-widest rounded px-1 py-0.5 border-none outline-none"
                         >
                           <option value="content">Text</option>
                           <option value="abstract">Abstract</option>
                           <option value="image">Image</option>
                         </select>
+                        {/* AI Refine */}
                         <button onClick={e => { e.stopPropagation(); aiRefineBlock(section.id); }}
                           className="p-1 hover:bg-indigo-500/20 rounded-lg transition-all" title="AI Refine">
                           {isAiRefining === section.id ? <Loader2 size={12} className="animate-spin text-indigo-400"/> : <Sparkles size={12} className="text-indigo-400"/>}
                         </button>
+                        {/* Delete */}
                         <button onClick={e => { e.stopPropagation(); deleteSection(section.id); }}
                           className="p-1 hover:bg-red-500/20 rounded-lg transition-all">
                           <Trash2 size={12} className="text-slate-500 hover:text-red-400"/>
@@ -448,9 +603,14 @@ export default function RunDetailPage() {
                         )}
                       </div>
                     ) : (
-                      <p className="px-4 pb-3 text-xs text-slate-500 leading-relaxed line-clamp-2 italic">
-                        {section.type === 'image' ? (section.content ? `Image: ${section.content}` : 'No image URL...') : (section.content || 'Click to edit...')}
-                      </p>
+                      <div className="px-4 pb-3">
+                        <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 italic">
+                          {section.type === 'image' ? (section.content ? `Image: ${section.content}` : 'No image URL...') : (section.content || 'Click to edit...')}
+                        </p>
+                        {section.content && (
+                          <p className="text-[8px] text-slate-600 mt-1 font-mono">{getWordCount(section.content)} words</p>
+                        )}
+                      </div>
                     )}
                   </div>
                 ))}
@@ -487,6 +647,44 @@ export default function RunDetailPage() {
                       </div>
                     )}
                     <div ref={chatEndRef} />
+                  </div>
+                  {/* Quick Actions */}
+                  <div className="px-3 py-2 bg-slate-950/40 border-t border-white/5">
+                    <div className="flex gap-1 flex-wrap">
+                      {[
+                        { label: '✨ Expand', prompt: 'Please expand and add more detail to the current section. Include more technical depth and supporting arguments.' },
+                        { label: '📝 Simplify', prompt: 'Please simplify the language in the current section. Make it more accessible while maintaining academic rigor.' },
+                        { label: '🎯 Formalize', prompt: 'Please make the current section more formal and academic. Use precise terminology and passive voice where appropriate.' },
+                        { label: '🔗 Add citations', prompt: 'Please add placeholder citations to the current section where claims are made. Use [Author, Year] format.' },
+                        { label: '📊 Add examples', prompt: 'Please add concrete examples and case studies to illustrate the key points in the current section.' },
+                      ].map((action, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            setChatInput(action.prompt);
+                            // Auto-send after setting input
+                            setTimeout(() => {
+                              if (id) {
+                                const userMsg: ChatMsg = { role: 'user', content: action.prompt };
+                                const history = [...chatMessages, userMsg];
+                                setChatMessages(history);
+                                setChatInput('');
+                                setIsChatLoading(true);
+                                runsAPI.chat(id, history).then(res => {
+                                  const { content } = res.data;
+                                  setChatMessages([...history, { role: 'assistant', content: content || 'No response.' }]);
+                                }).catch((e: any) => {
+                                  toast.error(`Chat failed: ${e?.response?.data?.detail || 'check backend'}`);
+                                }).finally(() => setIsChatLoading(false));
+                              }
+                            }, 50);
+                          }}
+                          className="px-2 py-1 bg-slate-800 hover:bg-indigo-500/20 text-[9px] font-bold text-slate-300 hover:text-indigo-400 rounded transition-all whitespace-nowrap"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="p-3 bg-slate-950/60 border-t border-white/5">
                     <div className="relative">

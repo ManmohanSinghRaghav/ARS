@@ -134,7 +134,7 @@ def _patch_crewai_llm():
                     from app.pipeline.progress import add_step
                     rid = get_run_id()
                     if rid:
-                        add_step(rid, 0, 12, f"System Retry: High demand on {self.model} (503). Waiting 20s...", status="running", detail=str(e), is_internal=True)
+                        add_step(rid, 0, 15, f"System Retry: High demand on {self.model} (503). Waiting 20s...", status="running", detail=str(e), is_internal=True)
                 except Exception:
                     pass
                 time.sleep(20) # User requested longer waits
@@ -148,7 +148,7 @@ def _patch_crewai_llm():
                     from app.pipeline.progress import add_step
                     rid = get_run_id()
                     if rid:
-                        add_step(rid, 0, 12, f"System Retry: Rate limit (429) on {self.model}. Cooldown 15s...", status="running", detail=str(e), is_internal=True)
+                        add_step(rid, 0, 15, f"System Retry: Rate limit (429) on {self.model}. Cooldown 15s...", status="running", detail=str(e), is_internal=True)
                 except Exception:
                     pass
                 time.sleep(15)

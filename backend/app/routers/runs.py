@@ -375,18 +375,8 @@ def update_paper(
         "version": new_version
     })
 
-    # Update Storage if available (graceful — bucket may not exist)
-    try:
-        from app.config import get_settings
-        from app.database import get_storage_bucket
-        settings = get_settings()
-        if settings.FIREBASE_STORAGE_BUCKET:
-            bucket = get_storage_bucket()
-            if bucket:
-                blob = bucket.blob(f"runs/{run_id}/paper.json")
-                blob.upload_from_string(json.dumps(new_json), content_type="application/json")
-    except Exception as e:
-        print(f"[Runs] Warning: Storage upload failed (non-fatal): {e}")
+    # Note: paper_json is saved directly to Firestore above
+    # Storage bucket upload removed - relying on Firestore as primary storage
 
     return {"status": "success", "message": "Paper JSON updated", "version": new_version}
 
@@ -429,7 +419,7 @@ async def run_grounded_chat(
     current_user: User = Depends(get_current_user),
     db = Depends(get_db),
 ):
-    """Chat with a specific paper using its content as context."""
+    """Chat with a specific paper using its content as context. Supports edit detection and refinement."""
     doc_ref = db.collection("runs").document(run_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -444,14 +434,21 @@ async def run_grounded_chat(
     if not messages:
         raise HTTPException(status_code=400, detail="messages are required")
 
-    # Use reasoning engine to detect if this is a question or an edit command
     from app.pipeline.llm_factory import get_tier_llm
-    llm = get_tier_llm("reasoning", llm_config)  # Fix #4: pass llm_config
+    llm = get_tier_llm("reasoning", llm_config)
     
     last_message = messages[-1]['content']
-    intent_prompt = f"""Analyze the user's message: "{last_message}"
-    Is the user asking for a CHANGE, EDIT, or UPDATE to the research paper content? 
-    Reply with ONLY 'EDIT' or 'QUESTION'.
+    
+    # Enhanced intent detection with more granular classification
+    intent_prompt = f"""Analyze the user's message in the context of editing a research paper:
+    Message: "{last_message}"
+    
+    Classify the intent as exactly one of:
+    - EDIT: User wants to modify, change, rewrite, or update paper content
+    - QUESTION: User is asking about the paper content or seeking information
+    - EXPLAIN: User wants clarification or explanation of existing content
+    
+    Reply with ONLY the classification keyword.
     """
     intent = llm.call(intent_prompt).strip().upper()
 
@@ -469,19 +466,51 @@ async def run_grounded_chat(
             "action_triggered": "refining"
         }
 
-    # Otherwise, proceed with normal grounded QA
+    # Get paper context for grounded responses
     paper_json = run.get("paper_json", {})
-    paper_content = json.dumps(paper_json, indent=2)
+    sections = paper_json.get("sections", [])
+    metadata = paper_json.get("metadata", {})
+    
+    # Build structured context with section summaries
+    paper_context = f"Paper Title: {metadata.get('title', 'Untitled')}\n"
+    paper_context += f"Author: {metadata.get('author', 'Unknown')}\n"
+    paper_context += f"Institution: {metadata.get('institution', 'Unknown')}\n\n"
+    paper_context += "Sections:\n"
+    
+    for i, section in enumerate(sections):
+        title = section.get('title', f'Section {i+1}')
+        content = section.get('content', '')
+        word_count = len(content.split()) if content else 0
+        paper_context += f"- {title} ({word_count} words)\n"
+    
+    # Include full content for RAG (truncated if too long)
+    paper_content = json.dumps(paper_json, indent=2)[:20000]
     history = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
     
-    system_prompt = f"You are the ARS Research Assistant. Answer questions about the following research paper. Use ONLY the provided context.\n\nPaper Content:\n{paper_content[:20000]}"
-    full_prompt = f"{system_prompt}\n\nHistory:\n{history}\n\nASSISTANT:"
+    system_prompt = f"""You are the ARS Research Assistant, an expert academic writing companion.
+
+Paper Context:
+{paper_context}
+
+Full Paper Content:
+{paper_content}
+
+Guidelines:
+1. Always ground your responses in the provided paper content
+2. If asked about specific sections, reference them by name
+3. For writing suggestions, maintain academic tone and rigor
+4. If information is not in the paper, clearly state that
+5. Provide actionable, specific suggestions when helpful
+"""
+    
+    full_prompt = f"{system_prompt}\n\nConversation History:\n{history}\n\nASSISTANT:"
     
     try:
         response = llm.call(full_prompt)
         return {"content": response.strip(), "action_triggered": "chat"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Grounded chat failed: {e}")
+        print(f"[Chat] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Grounded chat failed: {str(e)}")
 
 
 @router.patch("/{run_id}/paper/sections/{section_id}")

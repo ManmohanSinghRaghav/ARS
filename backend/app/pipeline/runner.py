@@ -87,7 +87,7 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
             set_tavily_api_key(tavily_api_key)
             set_run_id(run_id)
             set_llm_config(llm_config)
-            add_step(run_id, 0, 10, "Initializing CrewAI pipeline", "running")
+            add_step(run_id, 0, 15, "Initializing CrewAI pipeline", "running")
 
             result = run_crew_pipeline(
                 topic=topic,
@@ -98,18 +98,8 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
             # Extract structured JSON paper
             paper_json = result.get("paper_json", {})
 
-            # Upload JSON to storage if available
-            from app.database import get_storage_bucket
-            storage_bucket = get_storage_bucket()
-            if storage_bucket and paper_json:
-                try:
-                    json_blob = storage_bucket.blob(f"runs/{run_id}/paper.json")
-                    json_blob.upload_from_string(
-                        json.dumps(paper_json, indent=2),
-                        content_type="application/json"
-                    )
-                except Exception as e:
-                    print(f"[Pipeline] Warning: JSON upload failed: {e}")
+            # Note: paper_json is saved directly to Firestore below (run_ref.update)
+            # Storage bucket upload removed - relying on Firestore as primary storage
 
             run_ref.update({
                 "status": "completed",
@@ -137,7 +127,7 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
                 "status": "failed",
                 "error_message": f"{type(e).__name__}: {e}",
             })
-            add_step(run_id, 0, 10, f"Pipeline failed: {e}", "error")
+            add_step(run_id, 0, 15, f"Pipeline failed: {e}", "error")
             print(f"[Pipeline] FAILED: {e}")
             traceback.print_exc()
 

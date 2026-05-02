@@ -46,9 +46,9 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
 
     # Helper function to report to UI
     def _progress(step: int, title: str, status: str = "running", detail: str = "", output: str = "", is_internal: bool = False):
-        # Total steps in modular pipeline is roughly 12 (including writing segments)
-        add_step(run_id, step, 12, title, status, detail, output, is_internal=is_internal)
-        print(f"[CrewAI] Step {step}/12 - {title}")
+        # Total steps in modular pipeline (unique step numbers for resume-safe progress)
+        add_step(run_id, step, 15, title, status, detail, output, is_internal=is_internal)
+        print(f"[CrewAI] Step {step}/15 - {title}")
 
     # Load previously completed tasks for resumption
     completed_tasks = get_completed_tasks(run_id)
@@ -322,57 +322,123 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         _progress(6, "Sandbox Execution complete", "done", output=task_output.raw)
     task_experiment.callback = task_experiment_res_cb
 
+    def task_logic_verify_cb(task_output):
+        _progress(7, "Logic Critic: Adversarial Review Complete", "done", output=task_output.raw)
+
+    task_logic_verify.callback = task_logic_verify_cb
+
     def task_verify_cb(task_output):
-        # Validate hallucination threshold
+        # Validate hallucination threshold (verbatim_quote + SPECULATIVE prefix per task prompt)
         try:
-            val = task_output.raw
-            parsed = json.loads(val[val.find('['):val.rfind(']')+1])
-            speculative_ops = sum(1 for c in parsed if c.get('status') == 'Speculative')
-            if speculative_ops > len(parsed) / 2:
-                 _progress(8, f"Adversarial Critic: Tracing failed. High Speculative claims ({speculative_ops}). Halt triggered.", "error")
-                 raise ValueError("Adversarial Verifier Halt: Hallucination ratio exceeded > 50%. Reflexion required.")
+            val = task_output.raw or ""
+            start, end = val.find("["), val.rfind("]")
+            if start == -1 or end == -1:
+                raise json.JSONDecodeError("no array", val, 0)
+            parsed = json.loads(val[start : end + 1])
+            if not isinstance(parsed, list):
+                parsed = parsed.get("claims", []) if isinstance(parsed, dict) else []
+            claims = [c for c in parsed if isinstance(c, dict)]
+            if not claims:
+                _progress(
+                    8,
+                    "Adversarial Critic: no claims parsed.",
+                    "warning",
+                    output=task_output.raw,
+                    is_internal=True,
+                )
+                return
+            speculative = sum(
+                1
+                for c in claims
+                if str(c.get("verbatim_quote", "")).strip().upper().startswith("SPECULATIVE")
+            )
+            if speculative > len(claims) / 2:
+                _progress(
+                    8,
+                    f"Adversarial Critic: high speculative ratio ({speculative}/{len(claims)}). Halt.",
+                    "error",
+                )
+                raise ValueError(
+                    "Adversarial Verifier Halt: hallucination ratio > 50%. Reflexion required."
+                )
             _progress(8, "Adversarial Critic: RefLens Verification Passed", "done", output=task_output.raw)
         except json.JSONDecodeError:
-            _progress(8, "Adversarial Critic: JSON parse error during verification.", "warning", output=task_output.raw, is_internal=True)
-            
+            _progress(
+                8,
+                "Adversarial Critic: JSON parse error during verification.",
+                "warning",
+                output=task_output.raw,
+                is_internal=True,
+            )
+
     task_verify.callback = task_verify_cb
 
-    # Writing callbacks
-    def task_intro_cb(o): _progress(10, "Writing: Introduction Drafted", "done", output=o.raw)
+    # Writing callbacks — one unique step number per task for resume-safe get_completed_tasks()
+    def task_intro_cb(o):
+        _progress(9, "Writing: Introduction Drafted", "done", output=o.raw)
+
     task_intro.callback = task_intro_cb
-    
-    def task_compilation_cb(o): _progress(12, "Final Manuscript Compiled & Synchronized", "done", output=o.raw)
+
+    def task_rw_cb(o):
+        _progress(10, "Writing: Related Work Drafted", "done", output=o.raw)
+
+    task_rw.callback = task_rw_cb
+
+    def task_methodology_cb(o):
+        _progress(11, "Writing: Methodology Drafted", "done", output=o.raw)
+
+    task_methodology.callback = task_methodology_cb
+
+    def task_results_cb(o):
+        _progress(12, "Writing: Results Drafted", "done", output=o.raw)
+
+    task_results.callback = task_results_cb
+
+    def task_conclusion_cb(o):
+        _progress(13, "Writing: Conclusion Drafted", "done", output=o.raw)
+
+    task_conclusion.callback = task_conclusion_cb
+
+    def task_abstract_cb(o):
+        _progress(14, "Writing: Abstract Drafted", "done", output=o.raw)
+
+    task_abstract.callback = task_abstract_cb
+
+    def task_compilation_cb(o):
+        _progress(15, "Final Manuscript Compiled & Synchronized", "done", output=o.raw)
+
     task_compilation.callback = task_compilation_cb
 
     # ==========================================
     # RESUMPTION LOGIC
     # ==========================================
-    all_tasks_map = {
-        2: task_research,
-        4: task_hypothesis,
-        6: task_experiment,
-        8: task_verify,
-        10: task_intro, # Simplified progress mapping
-        12: task_compilation
-    }
-    
+    all_tasks_ordered = [
+        (2, task_research),
+        (4, task_hypothesis),
+        (6, task_experiment),
+        (7, task_logic_verify),
+        (8, task_verify),
+        (9, task_intro),
+        (10, task_rw),
+        (11, task_methodology),
+        (12, task_results),
+        (13, task_conclusion),
+        (14, task_abstract),
+        (15, task_compilation),
+    ]
+
     tasks_to_run = []
-    for step_idx, task_obj in [
-        (2, task_research), (4, task_hypothesis), (6, task_experiment), (7, task_logic_verify), (8, task_verify),
-        (9, task_intro), (9, task_rw), (9, task_methodology), (9, task_results), (9, task_conclusion), (9, task_abstract),
-        (12, task_compilation)
-    ]:
+    for step_idx, task_obj in all_tasks_ordered:
         if step_idx in completed_tasks:
             print(f"[CrewAI] Skipping Step {step_idx}: Task already completed.")
             # Inject cached output so downstream tasks can use it
             task_obj.output = TaskOutput(
                 description=task_obj.description,
                 raw=completed_tasks[step_idx],
-                agent=task_obj.agent.role if task_obj.agent else "System"
+                agent=task_obj.agent.role if task_obj.agent else "System",
             )
         else:
-            if task_obj not in tasks_to_run:
-                tasks_to_run.append(task_obj)
+            tasks_to_run.append(task_obj)
 
     # ==========================================
     # CREW
@@ -392,7 +458,7 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         final_body = crew.kickoff()
     except Exception as e:
         print(f"[CrewAI] Reflexion Error: {e}")
-        raise e
+        raise
 
     # Final Manuscript Extraction (JSON) — multi-strategy robust parser
     paper_json = {}
@@ -453,11 +519,14 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
                 # Extract spans from grounding cards
                 grounding_spans = [
                     {
-                        "text": card.get("evidence_span", ""),
+                        "text": card.get("evidence_span")
+                        or card.get("verbatim_quote", ""),
                         "source": card.get("claim", ""),
-                        "url": ""
+                        "url": "",
                     }
-                    for card in grounding_cards if isinstance(card, dict) and card.get("evidence_span")
+                    for card in grounding_cards
+                    if isinstance(card, dict)
+                    and (card.get("evidence_span") or card.get("verbatim_quote"))
                 ]
                 if grounding_spans:
                     index_grounding_spans(run_id, topic, grounding_spans)

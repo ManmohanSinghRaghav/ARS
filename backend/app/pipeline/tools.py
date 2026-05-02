@@ -78,7 +78,7 @@ def _summarize_batch(existing_summary: str | None, docs: List[str], topic: str) 
         "Return only the final summary."
     )
 
-    llm = get_tier_llm("extraction")
+    llm = get_tier_llm("extraction", get_llm_config() or None)
     return llm.call("\n".join(prompt_parts)).strip()
 
 

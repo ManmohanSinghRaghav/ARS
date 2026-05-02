@@ -125,10 +125,43 @@ async def suggest_topics(
 @router.post("/chat")
 async def discovery_chat(
     payload: DiscoveryChatRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """Refine a vague research topic through conversation."""
     llm = get_tier_llm("extraction")  # Light engine for speed
+
+    # Pull the user's LLM config from Firestore (same pattern as suggest_topics)
+    try:
+        from app.security.crypto import decrypt_str
+        from app.config import get_settings
+
+        defaults = get_settings()
+        doc = db.collection("user_settings").document(current_user.id).get()
+        us = doc.to_dict() if doc.exists else {}
+
+        def _dec(field):
+            try:
+                return decrypt_str(us.get(field))
+            except Exception:
+                return ""
+
+        user_llm_config = {
+            "gemini_api_key": (_dec("gemini_api_key") if us.get("gemini_api_key") else "")
+            or defaults.GEMINI_API_KEY,
+            "groq_api_key": (_dec("groq_api_key") if us.get("groq_api_key") else "")
+            or defaults.GROQ_API_KEY,
+            "openai_api_key": (_dec("openai_api_key") if us.get("openai_api_key") else "")
+            or defaults.OPENAI_API_KEY,
+            "claude_api_key": (_dec("claude_api_key") if us.get("claude_api_key") else "")
+            or defaults.CLAUDE_API_KEY,
+            "light_model": us.get("light_model") or defaults.DEFAULT_LIGHT_MODEL,
+            "light_rpm": us.get("light_rpm") or defaults.DEFAULT_LIGHT_RPM,
+            "light_tpm": us.get("light_tpm") or defaults.DEFAULT_LIGHT_TPM,
+        }
+        llm = get_tier_llm("extraction", user_llm_config)
+    except Exception:
+        pass  # Fall back to default LLM
 
     history = "\n".join([f"{m.role.upper()}: {m.content}" for m in payload.messages])
     full_prompt = f"{DISCOVERY_CHAT_PROMPT}\n\nUser Vibe: {payload.vibe}\n\nHistory:\n{history}\n\nASSISTANT:"

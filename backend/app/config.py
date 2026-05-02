@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     LLM_BACKEND: str = "gemini"       # default: gemini | ollama | mlx
     MLX_MODEL: str = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"  # macOS only
     OLLAMA_MODEL: str = "llama3"
-    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_URL: str = ""
     
     # ── Dynamic Model Categories ──
     DEFAULT_HEAVY_MODEL: str = "gemini/gemini-3.1-flash-lite-preview"
