@@ -22,7 +22,7 @@ LimitNOFILE=65535
 LimitNPROC=65535
 
 # Resource limits for t3.micro
-MemoryLimit=512M
+MemoryMax=512M
 MemoryAccounting=yes
 
 # Standard output/error
