@@ -98,19 +98,38 @@ def _execute_pipeline(run_id: str, topic: str, user_id: str,
             # Extract structured JSON paper
             paper_json = result.get("paper_json", {})
 
-            # Note: paper_json is saved directly to Firestore below (run_ref.update)
-            # Storage bucket upload removed - relying on Firestore as primary storage
+            # ── Refactored Storage: Save to Manuscripts Collection ──
+            try:
+                # Mask sensitive keys before persisting settings
+                safe_settings = dict(llm_config) if llm_config else {}
+                for _k in ("openai_api_key", "gemini_api_key", "claude_api_key", "groq_api_key"):
+                    if _k in safe_settings and safe_settings.get(_k):
+                        safe_settings[_k] = "<redacted>"
+
+                manuscript_ref = db_client.collection("manuscripts").document(run_id)
+                manuscript_ref.set({
+                    "run_id": run_id,
+                    "paper_json": paper_json,
+                    "settings": safe_settings, # Store sanitized settings
+                    "version": 1,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }, merge=True)
+                print(f"[Pipeline] Paper JSON and settings stored in 'manuscripts/{run_id}'")
+            except Exception as e:
+                print(f"[Pipeline] Warning: Failed to save to manuscripts collection: {e}")
 
             run_ref.update({
                 "status": "completed",
                 "hypothesis": result.get("hypothesis", ""),
                 "generated_code": "",
                 "execution_output": result.get("execution_output", ""),
-                "paper_json": paper_json,
                 "version": 1,
+                "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in paper_json.get("sections", []) if isinstance(s, dict)),
                 "summary_json": result.get("summary_data", {}),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
+
+
 
             # Fix #7: Save paper_json to local file as persistent backup
             try:
@@ -183,13 +202,41 @@ def _execute_refinement(run_id: str, feedback: str, user_id: str, llm_config: Op
             print("[Pipeline] Warning: Could not parse refined JSON; using raw fallback.")
             refined_json = {"sections": [{"id": "raw", "type": "content", "title": "Refined Content", "content": str(refined_paper_str)}]}
 
+        # ── Refactored Storage: Update Manuscripts Collection ──
+            new_version = run_ref.get().to_dict().get("version", 0) + 1
+        try:
+            manuscript_ref = db_client.collection("manuscripts").document(run_id)
+            manuscript_ref.update({
+                "paper_json": refined_json,
+                "version": new_version,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+            print(f"[Pipeline] Refined paper updated in 'manuscripts/{run_id}'")
+        except Exception as e:
+            # If document doesn't exist in manuscripts, create it
+            # Ensure we store sanitized settings when creating the document
+            safe_settings = dict(llm_config) if llm_config else {}
+            for _k in ("openai_api_key", "gemini_api_key", "claude_api_key", "groq_api_key"):
+                if _k in safe_settings and safe_settings.get(_k):
+                    safe_settings[_k] = "<redacted>"
+
+            db_client.collection("manuscripts").document(run_id).set({
+                "run_id": run_id,
+                "paper_json": refined_json,
+                "settings": safe_settings,
+                "version": new_version,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }, merge=True)
+
         run_ref.update({
             "status": "completed",
-            "paper_json": refined_json,
-            "version": run_ref.get().to_dict().get("version", 0) + 1,
+            "version": new_version,
+            "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in refined_json.get("sections", []) if isinstance(s, dict)),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
+
         add_step(run_id, 10, 10, "Refinement complete", "done")
+
 
     except Exception as e:
         run_ref.update({"status": "failed", "error_message": str(e)})

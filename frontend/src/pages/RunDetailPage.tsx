@@ -657,6 +657,7 @@ export default function RunDetailPage() {
                         { label: '🎯 Formalize', prompt: 'Please make the current section more formal and academic. Use precise terminology and passive voice where appropriate.' },
                         { label: '🔗 Add citations', prompt: 'Please add placeholder citations to the current section where claims are made. Use [Author, Year] format.' },
                         { label: '📊 Add examples', prompt: 'Please add concrete examples and case studies to illustrate the key points in the current section.' },
+                        { label: '🌱 GROW Coaching', prompt: 'I would like to use the GROW model (Goal, Reality, Options, Will) to improve my research paper. Can you walk me through it starting with the Goal?' },
                       ].map((action, idx) => (
                         <button
                           key={idx}

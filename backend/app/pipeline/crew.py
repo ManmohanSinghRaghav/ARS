@@ -460,29 +460,20 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         print(f"[CrewAI] Reflexion Error: {e}")
         raise
 
-    # Final Manuscript Extraction (JSON) — multi-strategy robust parser
+    # Final Manuscript Extraction (JSON) — robust parser
     paper_json = {}
     try:
-        raw_output = str(final_body)
-        # Strip markdown code fences if present
-        cleaned = raw_output.strip()
-        if cleaned.startswith('```'):
-            lines = cleaned.split('\n')
-            cleaned = '\n'.join(lines[1:] if lines[0].startswith('```') else lines)
-            if cleaned.endswith('```'):
-                cleaned = cleaned[:-3].strip()
-        # Strategy 1: find outermost { ... }
-        json_start = cleaned.find('{')
-        json_end = cleaned.rfind('}')
-        if json_start != -1 and json_end != -1:
-            json_str = cleaned[json_start:json_end+1]
-            paper_json = json.loads(json_str)
-        else:
-            paper_json = json.loads(cleaned)
+        from app.pipeline.utils import extract_json_from_text
+        paper_json = extract_json_from_text(str(final_body))
+        
+        if not paper_json:
+            raise ValueError("Extraction returned None")
+            
         # Validate structure
         if not paper_json.get('metadata') or not isinstance(paper_json.get('sections'), list):
             raise ValueError("Invalid paper structure")
     except Exception as e:
+
         print(f"[CrewAI] Warning: Failed to parse final paper JSON: {e}")
         # Fallback structure
         paper_json = {

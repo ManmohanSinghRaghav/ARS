@@ -4,6 +4,7 @@ Uses Firestore instead of SQLAlchemy.
 """
 
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse, Response
 from typing import List
@@ -134,17 +135,15 @@ def list_runs(
     result = []
     for doc in docs:
         r = doc.to_dict()
-        paper_json = r.get("paper_json", {})
-        sections = paper_json.get("sections", []) if isinstance(paper_json, dict) else []
-        word_count = sum(len(str(s.get("content") or "").split()) for s in sections if isinstance(s, dict))
         result.append({
             "id": r.get("id"),
             "topic": r.get("topic"),
             "status": r.get("status"),
-            "paper_word_count": word_count,
+            "paper_word_count": r.get("paper_word_count", 0),
             "created_at": r.get("created_at"),
             "completed_at": r.get("completed_at"),
         })
+
 
     # In-memory sort and pagination since index is missing
     result.sort(key=lambda x: x["created_at"], reverse=True)
@@ -164,7 +163,17 @@ def get_run(
     run = doc.to_dict()
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
+    
+    # ── Fetch Paper JSON from Manuscripts Collection ──
+    man_doc = db.collection("manuscripts").document(run_id).get()
+    if man_doc.exists:
+        man_data = man_doc.to_dict()
+        run["paper_json"] = man_data.get("paper_json")
+        run["version"] = man_data.get("version", run.get("version", 0))
+        # settings are also stored there but we usually get them from elsewhere or the run
+    
     return run
+
 
 
 @router.get("/{run_id}/paper", response_class=PlainTextResponse)
@@ -265,11 +274,15 @@ def download_paper_pdf(
 
     # 2. Try Generating from JSON (Pro Engine)
     run = doc.to_dict()
-    paper_json = run.get("paper_json")
+    # Try manuscripts collection first
+    man_doc = db.collection("manuscripts").document(run_id).get()
+    paper_json = man_doc.to_dict().get("paper_json") if man_doc.exists else run.get("paper_json")
+    
     if paper_json:
         from app.pipeline.pro_pdf import generate_pro_pdf
         try:
             pdf_bytes = generate_pro_pdf(paper_json)
+
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -369,16 +382,23 @@ def update_paper(
     if not new_json:
         raise HTTPException(status_code=400, detail="paper_json is required")
 
-    # Update Firestore
-    doc_ref.update({
+    # Update Manuscripts Collection
+    db.collection("manuscripts").document(run_id).set({
+        "run_id": run_id,
         "paper_json": new_json,
-        "version": new_version
+        "version": new_version,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }, merge=True)
+
+    # Keep version in run doc for listing
+    doc_ref.update({
+        "version": new_version,
+        "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in new_json.get("sections", []) if isinstance(s, dict))
     })
 
-    # Note: paper_json is saved directly to Firestore above
-    # Storage bucket upload removed - relying on Firestore as primary storage
 
-    return {"status": "success", "message": "Paper JSON updated", "version": new_version}
+    return {"status": "success", "message": "Paper JSON updated in manuscripts", "version": new_version}
+
 
 @router.post("/{run_id}/refine")
 def start_refinement(
@@ -447,6 +467,7 @@ async def run_grounded_chat(
     - EDIT: User wants to modify, change, rewrite, or update paper content
     - QUESTION: User is asking about the paper content or seeking information
     - EXPLAIN: User wants clarification or explanation of existing content
+    - GROW: User specifically asks for coaching, mentorship, or wants to use the GROW model (Goal, Reality, Options, Will)
     
     Reply with ONLY the classification keyword.
     """
@@ -466,10 +487,16 @@ async def run_grounded_chat(
             "action_triggered": "refining"
         }
 
+    # ── GROW Model Intent ──
+    is_grow = 'GROW' in intent or 'GOAL' in last_message.upper() and 'REALITY' in last_message.upper()
+    
     # Get paper context for grounded responses
-    paper_json = run.get("paper_json", {})
+    man_doc = db.collection("manuscripts").document(run_id).get()
+    paper_json = man_doc.to_dict().get("paper_json", {}) if man_doc.exists else run.get("paper_json", {})
+    
     sections = paper_json.get("sections", [])
     metadata = paper_json.get("metadata", {})
+
     
     # Build structured context with section summaries
     paper_context = f"Paper Title: {metadata.get('title', 'Untitled')}\n"
@@ -488,6 +515,7 @@ async def run_grounded_chat(
     history = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
     
     system_prompt = f"""You are the ARS Research Assistant, an expert academic writing companion.
+{"You are currently in GROW Coaching Mode. Use the GROW framework (Goal, Reality, Options, Will) to help the user refine their research strategy." if is_grow else ""}
 
 Paper Context:
 {paper_context}
@@ -501,7 +529,9 @@ Guidelines:
 3. For writing suggestions, maintain academic tone and rigor
 4. If information is not in the paper, clearly state that
 5. Provide actionable, specific suggestions when helpful
+{ "6. In GROW mode: Focus on helping the user identify their next steps using the 4 stages of GROW." if is_grow else "" }
 """
+
     
     full_prompt = f"{system_prompt}\n\nConversation History:\n{history}\n\nASSISTANT:"
     
@@ -530,7 +560,16 @@ def update_section(
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    paper_json = run.get("paper_json", {})
+    # ── Fetch and Update in Manuscripts ──
+    man_ref = db.collection("manuscripts").document(run_id)
+    man_doc = man_ref.get()
+    
+    if man_doc.exists:
+        paper_json = man_doc.to_dict().get("paper_json", {})
+    else:
+        # Fallback to run doc for legacy
+        paper_json = run.get("paper_json", {})
+        
     sections = paper_json.get("sections", [])
     updated = False
     for i, s in enumerate(sections):
@@ -543,8 +582,20 @@ def update_section(
 
     paper_json["sections"] = sections
     new_version = run.get("version", 0) + 1
-    doc_ref.update({"paper_json": paper_json, "version": new_version})
+    
+    man_ref.set({
+        "paper_json": paper_json,
+        "version": new_version,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }, merge=True)
+    
+    doc_ref.update({
+        "version": new_version,
+        "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in paper_json.get("sections", []) if isinstance(s, dict))
+    })
     return {"status": "ok", "version": new_version}
+
+
 
 
 @router.post("/{run_id}/paper/sections")
@@ -563,13 +614,29 @@ def add_section(
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    paper_json = run.get("paper_json", {})
+    # ── Fetch and Update in Manuscripts ──
+    man_ref = db.collection("manuscripts").document(run_id)
+    man_doc = man_ref.get()
+    paper_json = man_doc.to_dict().get("paper_json", {}) if man_doc.exists else run.get("paper_json", {})
+
     sections = paper_json.get("sections", [])
     sections.append(payload)
     paper_json["sections"] = sections
     new_version = run.get("version", 0) + 1
-    doc_ref.update({"paper_json": paper_json, "version": new_version})
+    
+    man_ref.set({
+        "paper_json": paper_json,
+        "version": new_version,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }, merge=True)
+    
+    doc_ref.update({
+        "version": new_version,
+        "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in paper_json.get("sections", []) if isinstance(s, dict))
+    })
     return {"status": "ok", "version": new_version}
+
+
 
 
 @router.delete("/{run_id}/paper/sections/{section_id}", status_code=204)
@@ -588,8 +655,24 @@ def delete_section(
     if run.get("user_id") != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    paper_json = run.get("paper_json", {})
+    # ── Fetch and Update in Manuscripts ──
+    man_ref = db.collection("manuscripts").document(run_id)
+    man_doc = man_ref.get()
+    paper_json = man_doc.to_dict().get("paper_json", {}) if man_doc.exists else run.get("paper_json", {})
+
     sections = [s for s in paper_json.get("sections", []) if s.get("id") != section_id]
     paper_json["sections"] = sections
     new_version = run.get("version", 0) + 1
-    doc_ref.update({"paper_json": paper_json, "version": new_version})
+    
+    man_ref.set({
+        "paper_json": paper_json,
+        "version": new_version,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }, merge=True)
+    
+    doc_ref.update({
+        "version": new_version,
+        "paper_word_count": sum(len(str(s.get("content") or "").split()) for s in paper_json.get("sections", []) if isinstance(s, dict))
+    })
+    return {"status": "ok", "version": new_version}
+
