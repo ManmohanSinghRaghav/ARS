@@ -281,6 +281,18 @@ def download_paper_pdf(
     if paper_json:
         from app.pipeline.pro_pdf import generate_pro_pdf
         try:
+            # Ensure paper_json is a dict
+            if isinstance(paper_json, str):
+                import json
+                paper_json = json.loads(paper_json)
+            
+            # Validate required structure
+            if not isinstance(paper_json, dict):
+                raise ValueError(f"paper_json must be a dict, got {type(paper_json)}")
+            
+            if "sections" not in paper_json:
+                raise ValueError("paper_json missing 'sections' field")
+            
             pdf_bytes = generate_pro_pdf(paper_json)
 
             return Response(
@@ -290,6 +302,7 @@ def download_paper_pdf(
             )
         except Exception as e:
             print(f"[Runs] Error generating Pro PDF: {e}")
+            print(f"[Runs] paper_json type: {type(paper_json)}, keys: {paper_json.keys() if isinstance(paper_json, dict) else 'N/A'}")
 
     raise HTTPException(status_code=404, detail="Paper content not found for PDF generation.")
 
