@@ -1,0 +1,41 @@
+[Unit]
+Description=ARS Backend Service - FastAPI + Gunicorn
+After=network.target
+StartLimitInterval=600
+StartLimitBurst=3
+
+[Service]
+Type=notify
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ARS/backend
+Environment="PATH=/home/ubuntu/ARS/backend/venv/bin"
+ExecStart=/home/ubuntu/ARS/backend/venv/bin/gunicorn \
+    --config /home/ubuntu/ARS/backend/gunicorn_config.py \
+    app.main:app
+
+# Auto-restart on failure
+Restart=always
+RestartSec=10
+
+# Process limits
+LimitNOFILE=65535
+LimitNPROC=65535
+
+# Resource limits for t3.micro
+MemoryLimit=512M
+MemoryAccounting=yes
+
+# Standard output/error
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ars-backend
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/ars-backend /home/ubuntu/ARS/outputs
+
+[Install]
+WantedBy=multi-user.target
