@@ -307,6 +307,53 @@ def download_paper_pdf(
     raise HTTPException(status_code=404, detail="Paper content not found for PDF generation.")
 
 
+@router.delete("/{run_id}/paper", status_code=status.HTTP_204_NO_CONTENT)
+def delete_paper(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Delete the research paper (markdown + JSON + PDF) for a run."""
+    doc_ref = db.collection("runs").document(run_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = doc.to_dict()
+    if run.get("user_id") != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Delete from Firestore
+    db.collection("runs").document(run_id).update({
+        "paper_markdown": "",
+        "paper_json": {},
+        "paper_word_count": 0,
+        "paper_updated_at": None,
+    })
+
+    # Delete from Cloud Storage if exists
+    settings = get_settings()
+    if settings.FIREBASE_STORAGE_BUCKET:
+        try:
+            from app.database import get_storage_bucket
+            bucket = get_storage_bucket()
+            if bucket:
+                # Delete markdown
+                md_blob = bucket.blob(f"runs/{run_id}/paper.md")
+                if md_blob.exists():
+                    md_blob.delete()
+                
+                # Delete PDF
+                pdf_blob = bucket.blob(f"runs/{run_id}/paper.pdf")
+                if pdf_blob.exists():
+                    pdf_blob.delete()
+                
+                print(f"[Runs] Deleted paper files for run {run_id} from Storage")
+        except Exception as e:
+            print(f"[Runs] Warning: Failed to delete paper files from Storage for {run_id}: {e}")
+
+    return None
+
+
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_run(
     run_id: str,

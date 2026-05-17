@@ -460,28 +460,167 @@ def run_crew_pipeline(topic: str, run_id: str, llm_config: dict | None = None) -
         print(f"[CrewAI] Reflexion Error: {e}")
         raise
 
-    # Final Manuscript Extraction (JSON) — robust parser
+    # Final Manuscript Extraction (JSON) — ITERATIVE COMPLETION SYSTEM
+    # Automatically requests additional iterations if JSON is incomplete
     paper_json = {}
     try:
-        from app.pipeline.utils import extract_json_from_text
-        paper_json = extract_json_from_text(str(final_body))
+        from app.pipeline.utils import extract_paper_json
+        from app.pipeline.iterative_json import IterativeJSONBuilder, is_json_complete
         
-        if not paper_json:
-            raise ValueError("Extraction returned None")
+        raw_output = str(final_body)
+        print(f"[CrewAI] Raw compilation output length: {len(raw_output)} chars")
+        print(f"[CrewAI] Output preview (first 300 chars): {raw_output[:300]}")
+        print(f"[CrewAI] Output ending (last 300 chars): {raw_output[-300:]}")
+        
+        # Check if JSON is complete
+        is_complete, parsed = is_json_complete(raw_output)
+        print(f"[CrewAI] JSON completeness check: is_complete={is_complete}")
+        
+        if is_complete and parsed:
+            paper_json = parsed
+            print(f"[CrewAI] ✅ First-pass: Complete JSON obtained")
+        else:
+            # JSON is incomplete - use iterative builder
+            print(f"[CrewAI] ⚠️  First-pass JSON incomplete, initiating iterative completion...")
+            builder = IterativeJSONBuilder(max_iterations=3)
             
-        # Validate structure
-        if not paper_json.get('metadata') or not isinstance(paper_json.get('sections'), list):
-            raise ValueError("Invalid paper structure")
+            # Process first iteration
+            is_complete_iter1, continuation_prompt = builder.add_iteration(raw_output)
+            status = builder.get_status()
+            print(f"[CrewAI] Iteration 1 status: {status}")
+            
+            # If not complete, request additional iterations
+            if not is_complete_iter1 and continuation_prompt:
+                print(f"[CrewAI] Requesting continuation from academic writer...")
+                print(f"[CrewAI] Continuation prompt: {continuation_prompt[:200]}...")
+                
+                # Create a continuation task for the academic writer
+                continuation_task = Task(
+                    description=continuation_prompt,
+                    expected_output="A complete valid JSON object with all sections.",
+                    agent=academic_writer,
+                    context=[task_abstract, task_intro, task_rw, task_methodology, task_results, task_conclusion],
+                    async_execution=False
+                )
+                
+                # Execute continuation task
+                try:
+                    continuation_crew = Crew(
+                        agents=[academic_writer],
+                        tasks=[continuation_task],
+                        process=Process.sequential,
+                        verbose=True,
+                        tracing=False
+                    )
+                    continuation_output = continuation_crew.kickoff()
+                    
+                    # Process second iteration
+                    is_complete_iter2, continuation_prompt_2 = builder.add_iteration(str(continuation_output))
+                    status = builder.get_status()
+                    print(f"[CrewAI] Iteration 2 status: {status}")
+                    
+                    # If still not complete, try one more time
+                    if not is_complete_iter2 and continuation_prompt_2:
+                        print(f"[CrewAI] Requesting final continuation...")
+                        final_continuation_task = Task(
+                            description=continuation_prompt_2,
+                            expected_output="A complete valid JSON object with all sections.",
+                            agent=academic_writer,
+                            context=[task_abstract, task_intro, task_rw, task_methodology, task_results, task_conclusion],
+                            async_execution=False
+                        )
+                        
+                        final_continuation_crew = Crew(
+                            agents=[academic_writer],
+                            tasks=[final_continuation_task],
+                            process=Process.sequential,
+                            verbose=True,
+                            tracing=False
+                        )
+                        final_continuation_output = final_continuation_crew.kickoff()
+                        
+                        # Process third iteration
+                        is_complete_iter3, _ = builder.add_iteration(str(final_continuation_output))
+                        status = builder.get_status()
+                        print(f"[CrewAI] Iteration 3 status: {status}")
+                
+                except Exception as e:
+                    print(f"[CrewAI] Warning: Continuation request failed: {e}")
+            
+            # Finalize: merge all iterations into single JSON
+            paper_json = builder.finalize()
+            if paper_json:
+                print(f"[CrewAI] ✅ Merged {builder.iterations.__len__()} iterations into complete paper JSON")
+            else:
+                raise ValueError("Failed to finalize paper JSON from iterations")
+        
+        # Validate required structure
+        if not isinstance(paper_json, dict):
+            raise ValueError(f"Expected dict, got {type(paper_json).__name__}")
+            
+        metadata = paper_json.get('metadata')
+        sections = paper_json.get('sections')
+        
+        if not metadata or not isinstance(metadata, dict):
+            raise ValueError("Missing or invalid 'metadata' field")
+        
+        if not sections or not isinstance(sections, list):
+            raise ValueError("Missing or invalid 'sections' field (must be list)")
+        
+        if len(sections) == 0:
+            raise ValueError("Paper has no sections")
+        
+        # Validate each section has required fields
+        for idx, section in enumerate(sections):
+            if not isinstance(section, dict):
+                raise ValueError(f"Section {idx} is not a dict: {type(section).__name__}")
+            
+            required = ['id', 'type', 'title', 'content']
+            missing = [f for f in required if f not in section]
+            if missing:
+                raise ValueError(f"Section {idx} missing fields: {missing}")
+            
+            # Ensure content is string
+            if not isinstance(section.get('content'), str):
+                section['content'] = str(section.get('content', ''))
+        
+        # Validate metadata has expected fields
+        if not metadata.get('title'):
+            metadata['title'] = topic.title()
+        if not metadata.get('author'):
+            metadata['author'] = "ARS Assistant"
+        if not metadata.get('date'):
+            metadata['date'] = "May 2026"
+        if not metadata.get('institution'):
+            metadata['institution'] = "GLA Lab"
+        
+        print(f"[CrewAI] ✅ Successfully parsed paper JSON with {len(sections)} sections")
+        for idx, section in enumerate(sections, 1):
+            content_preview = section.get('content', '')[:100].replace('\n', ' ')
+            print(f"  Section {idx}: {section.get('title')} ({len(section.get('content', ''))} chars)")
+        
     except Exception as e:
-
-        print(f"[CrewAI] Warning: Failed to parse final paper JSON: {e}")
-        # Fallback structure
+        print(f"[CrewAI] ⚠️  JSON parsing failed even with iterations: {e}")
+        print(f"[CrewAI] Attempting recovery with fallback structure...")
+        
+        # Fallback: wrap raw output in minimal structure
         paper_json = {
-            "metadata": {"title": topic.title(), "author": "ARS Assistant", "date": "May 2026", "institution": "GLA Lab"},
+            "metadata": {
+                "title": topic.title(),
+                "author": "ARS Assistant",
+                "date": "May 2026",
+                "institution": "GLA Lab"
+            },
             "sections": [
-                {"id": "raw", "type": "content", "title": "Manuscript", "content": str(final_body)}
+                {
+                    "id": "raw",
+                    "type": "content",
+                    "title": "Manuscript",
+                    "content": str(final_body)
+                }
             ]
         }
+        print(f"[CrewAI] Fallback structure created (single raw section with {len(str(final_body))} chars)")
 
     # Summary formatting (RefLens Grounding extraction) — always store parsed array
     summary_data = {}

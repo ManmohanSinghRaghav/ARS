@@ -365,6 +365,30 @@ export default function RunDetailPage() {
     }
   };
 
+  const deletePaper = async () => {
+    if (!id) return;
+    
+    if (!window.confirm('Are you sure you want to delete this paper? This action cannot be undone.')) {
+      return;
+    }
+
+    toast.loading('Deleting paper...', { id: 'delete-paper' });
+    try {
+      await runsAPI.deletePaper(id);
+      setPaperData(EMPTY_PAPER);
+      toast.success('Paper deleted successfully', { id: 'delete-paper' });
+      
+      // Refresh run data
+      if (id) {
+        const response = await runsAPI.get(id);
+        setRun(response.data);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete paper', { id: 'delete-paper' });
+    }
+  };
+
   useEffect(() => {
     if (run?.status === 'running' && activeTab !== 'telemetry') {
       setActiveTab('telemetry');
@@ -435,6 +459,10 @@ export default function RunDetailPage() {
           <button onClick={downloadProPdf}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-black uppercase shadow-lg transition-all active:scale-95">
             <Download size={13}/> Live PDF
+          </button>
+          <button onClick={deletePaper}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-red-600 hover:bg-red-500 rounded-lg text-xs font-black uppercase shadow-lg transition-all active:scale-95">
+            <Trash2 size={13}/> Delete Paper
           </button>
         </div>
       </div>

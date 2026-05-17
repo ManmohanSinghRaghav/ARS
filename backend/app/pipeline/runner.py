@@ -203,7 +203,7 @@ def _execute_refinement(run_id: str, feedback: str, user_id: str, llm_config: Op
             refined_json = {"sections": [{"id": "raw", "type": "content", "title": "Refined Content", "content": str(refined_paper_str)}]}
 
         # ── Refactored Storage: Update Manuscripts Collection ──
-            new_version = run_ref.get().to_dict().get("version", 0) + 1
+        new_version = run_ref.get().to_dict().get("version", 0) + 1
         try:
             manuscript_ref = db_client.collection("manuscripts").document(run_id)
             manuscript_ref.update({

@@ -55,6 +55,7 @@ export const runsAPI = {
   downloadPaper: (id: string) => client.get(`/runs/${id}/paper`, { responseType: 'text' }),
   downloadPaperPdf: (id: string) => client.get(`/runs/${id}/paper.pdf`, { responseType: 'blob' }),
   delete: (id: string) => client.delete(`/runs/${id}`),
+  deletePaper: (id: string) => client.delete(`/runs/${id}/paper`),
   updatePaper: (id: string, json: any, version: number = 0) => client.patch(`/runs/${id}/paper`, { paper_json: json, version }),
   refinePaper: (id: string, feedback: string) => client.post(`/runs/${id}/refine`, { feedback }),
   chat: (id: string, messages: any[]) => client.post(`/runs/${id}/chat`, { messages }),
